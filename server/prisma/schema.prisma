@@ -1,0 +1,99 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id              Int       @id @default(autoincrement())
+  email           String    @unique
+  password        String
+  name            String
+  role            String    @default("")
+  gpa             Float     @default(3.0)
+  skills          String    @default("")
+  schedule        String    @default("")
+  goal            String    @default("")
+  karma           Int       @default(80)
+  githubCommits   Int       @default(0)
+  eliteMinGpa     Float     @default(3.0)
+  
+  completedProjects Int     @default(0)
+  reliabilityLabel  Int     @default(1)
+  reviewCount       Int     @default(0)
+  matchingMode      String  @default("Hybrid")
+
+  vacancies       Vacancy[]
+  applications    Application[]
+  reviewsGiven    PeerReview[] @relation("Reviewer")
+  reviewsReceived PeerReview[] @relation("Reviewee")
+  messages        ChatMessage[]
+  projectMessages ProjectMessage[]
+}
+
+model Vacancy {
+  id            Int           @id @default(autoincrement())
+  projectName   String
+  title         String
+  neededRole    String
+  minGpa        Float
+  weeklyHours   Int
+  responseHours Int
+  mode          String
+  status        String        @default("Open")
+  description   String
+  
+  authorId      Int
+  author        User          @relation(fields: [authorId], references: [id])
+  
+  applications  Application[]
+  messages      ProjectMessage[]
+}
+
+model Application {
+  id          Int      @id @default(autoincrement())
+  vacancyId   Int
+  candidateId Int
+  status      String   @default("Pending")
+  createdAt   DateTime @default(now())
+  
+  vacancy     Vacancy  @relation(fields: [vacancyId], references: [id], onDelete: Cascade)
+  candidate   User     @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+}
+
+model PeerReview {
+  id          Int      @id @default(autoincrement())
+  reviewerId  Int
+  candidateId Int
+  rating      Int
+  teamwork    Int
+  reliability Int
+  comment     String
+  createdAt   DateTime @default(now())
+  
+  reviewer    User     @relation("Reviewer", fields: [reviewerId], references: [id])
+  candidate   User     @relation("Reviewee", fields: [candidateId], references: [id])
+}
+
+model ChatMessage {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  sender    String   // 'user' | 'assistant'
+  text      String
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id])
+}
+
+model ProjectMessage {
+  id          Int      @id @default(autoincrement())
+  text        String
+  senderId    Int
+  vacancyId   Int
+  createdAt   DateTime @default(now())
+  
+  sender      User     @relation(fields: [senderId], references: [id], onDelete: Cascade)
+  vacancy     Vacancy  @relation(fields: [vacancyId], references: [id], onDelete: Cascade)
+}
