@@ -15,11 +15,45 @@ const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 const adapter = new PrismaPg(pool);
 const prisma = new PrismaClient({ adapter });
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
 
 app.use(cors());
 app.use(express.json());
 
 const JWT_SECRET = process.env.JWT_SECRET || 'secret';
+
+const toSafeUser = (user: any) => ({
+  id: user.id,
+  email: user.email,
+  name: user.name,
+  role: user.role,
+  gpa: user.gpa,
+  skills: user.skills,
+  schedule: user.schedule,
+  goal: user.goal,
+  karma: user.karma,
+  githubCommits: user.githubCommits,
+  eliteMinGpa: user.eliteMinGpa,
+  completedProjects: user.completedProjects,
+  reliabilityLabel: user.reliabilityLabel,
+  reviewCount: user.reviewCount,
+  matchingMode: user.matchingMode
+});
+
+const canAccessProject = async (userId: number, vacancyId: number) => {
+  const project = await prisma.vacancy.findFirst({
+    where: {
+      id: vacancyId,
+      OR: [
+        { authorId: userId },
+        { applications: { some: { candidateId: userId, status: 'Accepted' } } }
+      ]
+    },
+    select: { id: true }
+  });
+
+  return Boolean(project);
+};
 
 // Auth Middleware
 const auth = (req: any, res: any, next: any) => {
@@ -45,7 +79,7 @@ app.post('/api/register', async (req, res) => {
       data: { email, password: hashedPassword, name, role, gpa: parseFloat(gpa), skills }
     });
     const token = jwt.sign({ id: user.id }, JWT_SECRET);
-    res.json({ token, user });
+    res.json({ token, user: toSafeUser(user) });
   } catch (err) {
     res.status(400).json({ error: 'Email already exists' });
   }
@@ -60,26 +94,49 @@ app.post('/api/login', async (req, res) => {
   if (!validPass) return res.status(400).json({ error: 'Invalid credentials' });
 
   const token = jwt.sign({ id: user.id }, JWT_SECRET);
-  res.json({ token, user });
+  res.json({ token, user: toSafeUser(user) });
 });
 
 // Users/Candidates
-app.get('/api/candidates', auth, async (req, res) => {
-  const users = await prisma.user.findMany({ select: { id: true, name: true, role: true, gpa: true, skills: true, karma: true, githubCommits: true, schedule: true, reliabilityLabel: true } });
+app.get('/api/candidates', auth, async (req: any, res) => {
+  const users = await prisma.user.findMany({
+    where: { id: { not: req.user.id } },
+    select: {
+      id: true,
+      name: true,
+      role: true,
+      gpa: true,
+      skills: true,
+      karma: true,
+      githubCommits: true,
+      schedule: true,
+      reliabilityLabel: true,
+      completedProjects: true,
+      reviewCount: true
+    }
+  });
   res.json(users);
 });
 
 // Profile Update
 app.put('/api/profile', auth, async (req: any, res: any) => {
-  const data = { ...req.body };
-  if (data.gpa) data.gpa = parseFloat(data.gpa);
-  if (data.eliteMinGpa) data.eliteMinGpa = parseFloat(data.eliteMinGpa);
+  const data = {
+    name: req.body.name,
+    role: req.body.role,
+    skills: req.body.skills,
+    gpa: req.body.gpa,
+    eliteMinGpa: req.body.eliteMinGpa,
+    matchingMode: req.body.matchingMode
+  } as Record<string, unknown>;
+
+  if (data.gpa) data.gpa = parseFloat(String(data.gpa));
+  if (data.eliteMinGpa) data.eliteMinGpa = parseFloat(String(data.eliteMinGpa));
   
   const user = await prisma.user.update({
     where: { id: req.user.id },
     data
   });
-  res.json(user);
+  res.json(toSafeUser(user));
 });
 
 // Vacancies
@@ -105,13 +162,20 @@ app.post('/api/vacancies', auth, async (req: any, res) => {
 });
 
 app.put('/api/vacancies/:id', auth, async (req: any, res) => {
+  const vacancyId = parseInt(req.params.id);
+  const existingVacancy = await prisma.vacancy.findUnique({ where: { id: vacancyId } });
+
+  if (!existingVacancy || existingVacancy.authorId !== req.user.id) {
+    return res.status(403).json({ error: 'Unauthorized to update this vacancy' });
+  }
+
   const data = { ...req.body };
   if (data.minGpa) data.minGpa = parseFloat(data.minGpa);
   if (data.weeklyHours) data.weeklyHours = parseInt(data.weeklyHours);
   if (data.responseHours) data.responseHours = parseInt(data.responseHours);
   
   const vacancy = await prisma.vacancy.update({
-    where: { id: parseInt(req.params.id) },
+    where: { id: vacancyId },
     data
   });
   res.json(vacancy);
@@ -148,9 +212,8 @@ Answer the user's questions about matching, recommend candidates, and provide ri
   `;
 
   try {
-    const model = genAI.getGenerativeModel({ model: 'gemini-pro' });
+    const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
     
-    // Gemini handles system instructions better as a separate part or combined in the first message
     const result = await model.generateContent({
       contents: [
         { role: 'user', parts: [{ text: `${systemMessage}\n\nUser Question: ${prompt}` }] }
@@ -170,9 +233,21 @@ Answer the user's questions about matching, recommend candidates, and provide ri
 app.post('/api/applications', auth, async (req: any, res) => {
   const { vacancyId } = req.body;
   try {
+    const normalizedVacancyId = parseInt(vacancyId);
+    const existing = await prisma.application.findFirst({
+      where: {
+        vacancyId: normalizedVacancyId,
+        candidateId: req.user.id
+      }
+    });
+
+    if (existing) {
+      return res.status(400).json({ error: 'Already applied' });
+    }
+
     const app = await prisma.application.create({
       data: {
-        vacancyId: parseInt(vacancyId),
+        vacancyId: normalizedVacancyId,
         candidateId: req.user.id,
         status: 'Pending'
       }
@@ -202,8 +277,18 @@ app.get('/api/applications', auth, async (req: any, res) => {
 
 app.put('/api/applications/:id', auth, async (req: any, res) => {
   const { status } = req.body;
+  const applicationId = parseInt(req.params.id);
+  const applicationRecord = await prisma.application.findUnique({
+    where: { id: applicationId },
+    include: { vacancy: { select: { authorId: true } } }
+  });
+
+  if (!applicationRecord || applicationRecord.vacancy.authorId !== req.user.id) {
+    return res.status(403).json({ error: 'Unauthorized to update this application' });
+  }
+
   const application = await prisma.application.update({
-    where: { id: parseInt(req.params.id) },
+    where: { id: applicationId },
     data: { status }
   });
   res.json(application);
@@ -259,6 +344,36 @@ app.post('/api/projects/finish', auth, async (req: any, res) => {
 
 app.post('/api/reviews', auth, async (req: any, res) => {
   const { candidateId, rating, teamwork, reliability, comment } = req.body;
+  const sharedProject = await prisma.vacancy.findFirst({
+    where: {
+      status: 'Completed',
+      OR: [
+        {
+          authorId: req.user.id,
+          applications: { some: { candidateId, status: 'Accepted' } }
+        },
+        {
+          authorId: candidateId,
+          applications: { some: { candidateId: req.user.id, status: 'Accepted' } }
+        },
+        {
+          applications: {
+            some: { candidateId: req.user.id, status: 'Accepted' }
+          },
+          AND: {
+            applications: {
+              some: { candidateId, status: 'Accepted' }
+            }
+          }
+        }
+      ]
+    },
+    select: { id: true }
+  });
+
+  if (!sharedProject) {
+    return res.status(403).json({ error: 'You can review only teammates from completed projects' });
+  }
   
   const review = await prisma.peerReview.create({
     data: {
@@ -293,8 +408,15 @@ app.post('/api/reviews', auth, async (req: any, res) => {
 
 // Group Chat API
 app.get('/api/projects/:vacancyId/messages', auth, async (req: any, res) => {
+  const vacancyId = parseInt(req.params.vacancyId);
+  const hasAccess = await canAccessProject(req.user.id, vacancyId);
+
+  if (!hasAccess) {
+    return res.status(403).json({ error: 'Unauthorized to view this chat' });
+  }
+
   const messages = await prisma.projectMessage.findMany({
-    where: { vacancyId: parseInt(req.params.vacancyId) },
+    where: { vacancyId },
     include: { sender: { select: { id: true, name: true, role: true } } },
     orderBy: { createdAt: 'asc' }
   });
@@ -303,10 +425,17 @@ app.get('/api/projects/:vacancyId/messages', auth, async (req: any, res) => {
 
 app.post('/api/projects/:vacancyId/messages', auth, async (req: any, res) => {
   const { text } = req.body;
+  const vacancyId = parseInt(req.params.vacancyId);
+  const hasAccess = await canAccessProject(req.user.id, vacancyId);
+
+  if (!hasAccess) {
+    return res.status(403).json({ error: 'Unauthorized to send messages to this chat' });
+  }
+
   const message = await prisma.projectMessage.create({
     data: {
       text,
-      vacancyId: parseInt(req.params.vacancyId),
+      vacancyId,
       senderId: req.user.id
     },
     include: { sender: { select: { id: true, name: true, role: true } } }

@@ -1,37 +1,174 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
+import { useNavigate, useParams } from 'react-router-dom';
+import {
+  Activity,
+  Briefcase,
+  CheckCircle,
+  Edit2,
+  Globe,
+  Info,
+  Loader,
+  Mail,
+  MessageSquare,
+  Send,
+  Star,
+  Trash2,
+  Users,
+  X,
+  Zap,
+} from 'lucide-react';
 import { Api } from './api';
 import { useAuth } from './AuthContext';
 import { MatchingEngine } from './engines';
-import type { MatchMode } from './models';
+import type { Candidate, MatchMode, UserProfile, Vacancy } from './models';
 import { ROLES } from './models';
-import { Send, Loader, Users, Target, Briefcase, UserCircle, Activity, Star, CheckCircle, Edit2, X, Trash2, Mail, Info, MessageSquare, Shield, Zap, Globe } from 'lucide-react';
-import { useNavigate, useParams } from 'react-router-dom';
 
-// ─── UI Components ────────────────────────────────────────────────────────────
+type ToastType = 'success' | 'error';
 
-const Modal = ({ isOpen, onClose, title, children }: any) => {
+type ToastState = {
+  message: string;
+  type: ToastType;
+} | null;
+
+type AppCandidate = Candidate & {
+  email?: string;
+};
+
+type IncomingApplication = {
+  id: number;
+  status: string;
+  candidate: {
+    id: number;
+    name: string;
+    role: string;
+    gpa: number;
+    karma: number;
+    skills: string;
+  };
+  vacancy: {
+    projectName: string;
+    neededRole: string;
+  };
+};
+
+type VacancyRecord = Vacancy & {
+  authorId: number;
+  author?: {
+    name: string;
+  };
+};
+
+type ProjectMember = {
+  id: number;
+  name: string;
+  role: string;
+  gpa?: number;
+  skills?: string;
+  isAuthor?: boolean;
+};
+
+type ProjectRecord = {
+  id: number;
+  projectName: string;
+  title: string;
+  neededRole: string;
+  status: string;
+  authorId: number;
+  author: ProjectMember;
+  applications: Array<{
+    id: number;
+    status: string;
+    candidate: ProjectMember;
+  }>;
+};
+
+type ProjectMessage = {
+  id: number;
+  text: string;
+  senderId: number;
+  sender: {
+    id: number;
+    name: string;
+    role: string;
+  };
+};
+
+type VacancyForm = {
+  projectName: string;
+  title: string;
+  neededRole: string;
+  minGpa: string;
+  weeklyHours: string;
+  responseHours: string;
+  mode: string;
+  description: string;
+};
+
+const defaultVacancyForm = (): VacancyForm => ({
+  projectName: '',
+  title: 'Teammate Needed',
+  neededRole: 'Developer',
+  minGpa: '3.0',
+  weeklyHours: '4',
+  responseHours: '24',
+  mode: 'Hybrid',
+  description: 'Looking for a motivated teammate.',
+});
+
+const buildProfileForm = (user: ReturnType<typeof useAuth>['user']) => ({
+  name: user?.name || '',
+  role: user?.role || 'Developer',
+  gpa: user?.gpa?.toString() || '3.0',
+  skills: user?.skills || '',
+  eliteMinGpa: user?.eliteMinGpa?.toString() || '3.5',
+  matchingMode: user?.matchingMode || 'Hybrid',
+});
+
+const Modal = ({
+  isOpen,
+  onClose,
+  title,
+  children,
+}: {
+  isOpen: boolean;
+  onClose: () => void;
+  title: string;
+  children: ReactNode;
+}) => {
   if (!isOpen) return null;
-  return (
+
+  return createPortal(
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-content animate-fade-in" onClick={e => e.stopPropagation()}>
+      <div className="modal-content animate-fade-in" onClick={(event) => event.stopPropagation()}>
         <div className="modal-header">
-          <h3 style={{ fontSize: '1.25rem', fontWeight: 700 }}>{title}</h3>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}>
-            <X size={24} />
+          <h3 style={{ fontSize: '1.1rem', fontWeight: 700 }}>{title}</h3>
+          <button
+            onClick={onClose}
+            style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}
+          >
+            <X size={22} />
           </button>
         </div>
         <div className="modal-body">{children}</div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 };
 
-// GroupChatModal is no longer used, we now use ChatScreen
-
-const Toast = ({ message, type = 'success', onClose }: any) => {
+const Toast = ({
+  message,
+  type,
+  onClose,
+}: {
+  message: string;
+  type: ToastType;
+  onClose: () => void;
+}) => {
   useEffect(() => {
-    const timer = setTimeout(onClose, 3000);
-    return () => clearTimeout(timer);
+    const timer = window.setTimeout(onClose, 3000);
+    return () => window.clearTimeout(timer);
   }, [onClose]);
 
   return (
@@ -42,80 +179,98 @@ const Toast = ({ message, type = 'success', onClose }: any) => {
   );
 };
 
-// ─── Dashboard ───────────────────────────────────────────────────────────────
 export const DashboardScreen = () => {
-  const { user, refreshUser } = useAuth();
+  const { user } = useAuth();
   const navigate = useNavigate();
   const [candidateCount, setCandidateCount] = useState(0);
   const [vacancyCount, setVacancyCount] = useState(0);
-  const [incomingApps, setIncomingApps] = useState<any[]>([]);
-  const [myProjects, setMyProjects] = useState<any[]>([]);
-  const [notification, setNotification] = useState<any>(null);
+  const [incomingApps, setIncomingApps] = useState<IncomingApplication[]>([]);
+  const [myProjects, setMyProjects] = useState<ProjectRecord[]>([]);
+  const [notification, setNotification] = useState<ToastState>(null);
 
   useEffect(() => {
-    Api.getCandidates().then(d => setCandidateCount(Array.isArray(d) ? d.length : 0)).catch(() => {});
-    Api.getVacancies().then(d => setVacancyCount(Array.isArray(d) ? d.length : 0)).catch(() => {});
-    Api.getApplications().then(d => d && d.incoming && setIncomingApps(d.incoming)).catch(() => {});
-    Api.getMyProjects().then(d => Array.isArray(d) && setMyProjects(d)).catch(() => {});
+    Api.getCandidates().then((data) => setCandidateCount(Array.isArray(data) ? data.length : 0)).catch(() => {});
+    Api.getVacancies().then((data) => setVacancyCount(Array.isArray(data) ? data.length : 0)).catch(() => {});
+    Api.getApplications()
+      .then((data) => setIncomingApps(Array.isArray(data?.incoming) ? data.incoming : []))
+      .catch(() => {});
+    Api.getMyProjects()
+      .then((data) => setMyProjects(Array.isArray(data) ? data : []))
+      .catch(() => {});
   }, []);
 
+  const refreshProjects = () => {
+    Api.getMyProjects().then((data) => setMyProjects(Array.isArray(data) ? data : []));
+    Api.getCandidates().then((data) => setCandidateCount(Array.isArray(data) ? data.length : 0));
+  };
+
   const handleStatus = async (id: number, status: string) => {
-    try {
-      await Api.updateApplicationStatus(id, status);
-      setNotification({ message: `Application ${status.toLowerCase()}`, type: 'success' });
-      Api.getApplications().then(d => d && d.incoming && setIncomingApps(d.incoming));
-    } catch (err) {
-      setNotification({ message: 'Error updating status', type: 'error' });
+    const data = await Api.updateApplicationStatus(id, status);
+    if (data?.error) {
+      setNotification({ message: data.error, type: 'error' });
+      return;
     }
+
+    setNotification({ message: `Application ${status.toLowerCase()}`, type: 'success' });
+    Api.getApplications().then((result) => setIncomingApps(Array.isArray(result?.incoming) ? result.incoming : []));
   };
 
   return (
     <div className="screen-container animate-fade-in">
       <div>
-        <h2 style={{ fontSize: '2.5rem', fontWeight: 800, marginBottom: '0.5rem', fontFamily: 'var(--font-heading)' }}>
-          Welcome back, {user?.name?.split(' ')[0] || 'Friend'} 👋
+        <h2 style={{ fontSize: '2rem', fontWeight: 800, marginBottom: '0.35rem', fontFamily: 'var(--font-heading)' }}>
+          Welcome back, {user?.name?.split(' ')[0] || 'Friend'}
         </h2>
-        <p style={{ color: 'var(--text-secondary)', fontSize: '1.1rem' }}>Here's what's happening with your team formation today.</p>
+        <p style={{ color: 'var(--text-secondary)', fontSize: '0.95rem' }}>
+          A compact view of your recruiting flow, active teams, and next actions.
+        </p>
       </div>
-      
-      <div className="grid" style={{ gridTemplateColumns: 'repeat(4, 1fr)', gap: '1rem' }}>
-        <div className="card stat-card">
-          <span style={{ color: 'var(--primary)', fontWeight: 600, fontSize: '0.75rem', textTransform: 'uppercase' }}>Vacancies</span>
-          <div className="stat-value" style={{ fontSize: '1.5rem' }}>{vacancyCount}</div>
-        </div>
-        <div className="card stat-card">
-          <span style={{ color: 'var(--secondary)', fontWeight: 600, fontSize: '0.75rem', textTransform: 'uppercase' }}>Candidates</span>
-          <div className="stat-value" style={{ fontSize: '1.5rem' }}>{candidateCount}</div>
-        </div>
-        <div className="card stat-card">
-          <span style={{ color: 'var(--warning)', fontWeight: 600, fontSize: '0.75rem', textTransform: 'uppercase' }}>Karma</span>
-          <div className="stat-value" style={{ fontSize: '1.5rem' }}>{user?.karma ?? 80}</div>
-        </div>
-        <div className="card stat-card">
-          <span style={{ color: 'var(--success)', fontWeight: 600, fontSize: '0.75rem', textTransform: 'uppercase' }}>Finished</span>
-          <div className="stat-value" style={{ fontSize: '1.5rem' }}>{user?.completedProjects ?? 0}</div>
-        </div>
+
+      <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '0.75rem' }}>
+        {[
+          { label: 'Vacancies', value: vacancyCount, color: 'var(--primary)' },
+          { label: 'Candidates', value: candidateCount, color: 'var(--secondary)' },
+          { label: 'Karma', value: user?.karma ?? 80, color: 'var(--warning)' },
+          { label: 'Finished', value: user?.completedProjects ?? 0, color: 'var(--success)' },
+        ].map((item) => (
+          <div key={item.label} className="card stat-card" style={{ padding: '0.85rem 1rem', minHeight: '92px' }}>
+            <span style={{ color: item.color, fontWeight: 600, fontSize: '0.72rem', textTransform: 'uppercase' }}>{item.label}</span>
+            <div className="stat-value" style={{ fontSize: '1.2rem' }}>{item.value}</div>
+          </div>
+        ))}
       </div>
 
       {incomingApps.length > 0 && (
         <div className="animate-fade-in">
-          <h3 style={{ fontSize: '1.5rem', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-            <Activity size={24} style={{ color: 'var(--primary)' }} /> Incoming Applications
+          <h3 style={{ fontSize: '1.2rem', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+            <Activity size={20} style={{ color: 'var(--primary)' }} /> Incoming Applications
           </h3>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-            {incomingApps.map((app: any) => (
-              <div key={app.id} className="card" style={{ display: 'grid', gridTemplateColumns: '1fr auto', alignItems: 'center' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+            {incomingApps.map((application) => (
+              <div
+                key={application.id}
+                className="card"
+                style={{ display: 'grid', gridTemplateColumns: '1fr auto', alignItems: 'center', gap: '0.75rem', padding: '0.9rem 1rem' }}
+              >
                 <div>
-                  <h4 style={{ fontSize: '1.1rem' }}>{app.candidate.name} applied for <span style={{ color: 'var(--primary)' }}>{app.vacancy.projectName}</span></h4>
-                  <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Role: {app.candidate.role} · GPA: {app.candidate.gpa} · Karma: {app.candidate.karma}</p>
+                  <h4 style={{ fontSize: '1rem' }}>
+                    {application.candidate.name} applied for <span style={{ color: 'var(--primary)' }}>{application.vacancy.projectName}</span>
+                  </h4>
+                  <p style={{ fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+                    Role: {application.candidate.role} | GPA: {application.candidate.gpa} | Karma: {application.candidate.karma}
+                  </p>
                 </div>
-                {app.status === 'Pending' ? (
+                {application.status === 'Pending' ? (
                   <div style={{ display: 'flex', gap: '0.5rem' }}>
-                    <button onClick={() => handleStatus(app.id, 'Accepted')} className="btn btn-primary" style={{ padding: '0.4rem 1rem', fontSize: '0.8rem' }}>Accept</button>
-                    <button onClick={() => handleStatus(app.id, 'Rejected')} className="btn btn-secondary" style={{ padding: '0.4rem 1rem', fontSize: '0.8rem' }}>Reject</button>
+                    <button onClick={() => handleStatus(application.id, 'Accepted')} className="btn btn-primary" style={{ padding: '0.4rem 0.9rem', fontSize: '0.8rem' }}>
+                      Accept
+                    </button>
+                    <button onClick={() => handleStatus(application.id, 'Rejected')} className="btn btn-secondary" style={{ padding: '0.4rem 0.9rem', fontSize: '0.8rem' }}>
+                      Reject
+                    </button>
                   </div>
                 ) : (
-                  <span className={`pill ${app.status === 'Accepted' ? 'pill-success' : 'pill-danger'}`}>{app.status}</span>
+                  <span className={`pill ${application.status === 'Accepted' ? 'pill-success' : 'pill-danger'}`}>{application.status}</span>
                 )}
               </div>
             ))}
@@ -124,32 +279,33 @@ export const DashboardScreen = () => {
       )}
 
       {myProjects.length > 0 && (
-        <div className="animate-fade-in" style={{ marginTop: '2rem' }}>
-          <h3 style={{ fontSize: '1.5rem', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-            <Briefcase size={24} style={{ color: 'var(--secondary)' }} /> Your Teams & Projects
+        <div className="animate-fade-in">
+          <h3 style={{ fontSize: '1.2rem', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+            <Briefcase size={20} style={{ color: 'var(--secondary)' }} /> Your Teams & Projects
           </h3>
-          <div className="grid" style={{ gridTemplateColumns: 'repeat(1, 1fr)', gap: '1.5rem' }}>
-            {myProjects.map((project: any) => (
-              <ProjectCard 
-                key={project.id} 
-                project={project} 
-                onRefresh={() => {
-                  Api.getMyProjects().then(d => Array.isArray(d) && setMyProjects(d));
-                  Api.getCandidates().then(d => setCandidateCount(Array.isArray(d) ? d.length : 0));
-                }}
-                onNotify={(msg: string, type: string) => setNotification({ message: msg, type })}
+          <div className="grid" style={{ gridTemplateColumns: '1fr', gap: '1rem' }}>
+            {myProjects.map((project) => (
+              <ProjectCard
+                key={project.id}
+                project={project}
+                onRefresh={refreshProjects}
+                onNotify={(message, type) => setNotification({ message, type })}
               />
             ))}
           </div>
         </div>
       )}
 
-      <div className="glass-card" style={{ display: 'grid', gridTemplateColumns: '1fr auto', alignItems: 'center' }}>
+      <div className="glass-card" style={{ display: 'grid', gridTemplateColumns: '1fr auto', alignItems: 'center', gap: '1rem', padding: '1rem 1.25rem' }}>
         <div>
-          <h3 style={{ fontSize: '1.25rem', marginBottom: '0.5rem' }}>Quick Match Analysis</h3>
-          <p style={{ color: 'var(--text-secondary)' }}>Based on your GPA ({user?.gpa}) and skills, you are a 92% match for 3 active projects.</p>
+          <h3 style={{ fontSize: '1rem', marginBottom: '0.35rem' }}>Quick Match Analysis</h3>
+          <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+            Open the ranking screen to compare candidates using your current GPA, skills, and preferred strategy.
+          </p>
         </div>
-        <button onClick={() => navigate('/match')} className="btn btn-primary">Start Matching</button>
+        <button onClick={() => navigate('/match')} className="btn btn-primary" style={{ whiteSpace: 'nowrap' }}>
+          Open Match Engine
+        </button>
       </div>
 
       <div className="toast-container">
@@ -159,82 +315,77 @@ export const DashboardScreen = () => {
   );
 };
 
-// ─── Profile ─────────────────────────────────────────────────────────────────
 export const ProfileScreen = () => {
   const { user, refreshUser } = useAuth();
-  const [form, setForm] = useState({
-    name: '', role: 'Developer',
-    gpa: '3.0', skills: '',
-    eliteMinGpa: '3.5',
-    matchingMode: 'Hybrid'
-  });
-  const [saved, setSaved] = useState(false);
-
-  useEffect(() => {
-    if (user) {
-      setForm({
-        name: user.name || '',
-        role: user.role || 'Developer',
-        gpa: user.gpa?.toString() || '3.0',
-        skills: user.skills || '',
-        eliteMinGpa: user.eliteMinGpa?.toString() || '3.5',
-        matchingMode: user.matchingMode || 'Hybrid'
-      });
-    }
-  }, [user]);
-
-  const [notification, setNotification] = useState<any>(null);
+  const [notification, setNotification] = useState<ToastState>(null);
+  const [form, setForm] = useState(() => buildProfileForm(user));
 
   const save = async () => {
-    try {
-      const updated = await Api.updateProfile(form);
-      if (updated && !updated.error) {
-        refreshUser(updated);
-        setNotification({ message: 'Profile updated successfully!', type: 'success' });
-      } else {
-        setNotification({ message: updated?.error || 'Failed to update profile', type: 'error' });
-      }
-    } catch (err) {
-      setNotification({ message: 'Connection error. Please try again.', type: 'error' });
+    const updated = await Api.updateProfile(form);
+    if (updated?.error) {
+      setNotification({ message: updated.error, type: 'error' });
+      return;
     }
+
+    refreshUser(updated);
+    setNotification({ message: 'Profile updated successfully', type: 'success' });
   };
 
   return (
     <div className="screen-container animate-fade-in">
       <div>
         <h2 style={{ fontSize: '2rem', fontWeight: 800, fontFamily: 'var(--font-heading)' }}>Your Profile</h2>
-        <p style={{ color: 'var(--text-secondary)' }}>Manage your professional identity and team preferences. You have finished <strong>{user?.completedProjects || 0} projects</strong>.</p>
+        <p style={{ color: 'var(--text-secondary)' }}>
+          Manage your identity and preferences. You have finished <strong>{user?.completedProjects || 0} projects</strong>.
+        </p>
       </div>
-      
-      <div className="card form-container-small" style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
-        <div className="grid" style={{ gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
-          <div className="form-group"><label className="form-label">Full Name</label><input value={form.name} onChange={e => setForm({...form, name: e.target.value})} /></div>
+
+      <div className="card form-container-small" style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+        <div className="grid" style={{ gridTemplateColumns: '1fr 1fr', gap: '1.25rem' }}>
+          <div className="form-group">
+            <label className="form-label">Full Name</label>
+            <input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} />
+          </div>
           <div className="form-group">
             <label className="form-label">Professional Role</label>
-            <select 
-              value={form.role} 
-              onChange={e => setForm({...form, role: e.target.value})}
+            <select
+              value={form.role}
+              onChange={(event) => setForm({ ...form, role: event.target.value })}
               style={{ width: '100%', padding: '0.75rem', borderRadius: 'var(--radius-md)', background: 'var(--bg-base)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
             >
-              {ROLES.map(r => <option key={r} value={r}>{r}</option>)}
+              {ROLES.map((role) => (
+                <option key={role} value={role}>
+                  {role}
+                </option>
+              ))}
             </select>
           </div>
-          <div className="form-group"><label className="form-label">Current GPA</label><input type="number" step="0.1" min="0" max="4" value={form.gpa} onChange={e => setForm({...form, gpa: e.target.value})} /></div>
-          <div className="form-group"><label className="form-label">Elite Min GPA Target</label><input type="number" step="0.1" min="0" max="4" value={form.eliteMinGpa} onChange={e => setForm({...form, eliteMinGpa: e.target.value})} /></div>
+          <div className="form-group">
+            <label className="form-label">Current GPA</label>
+            <input type="number" step="0.1" min="0" max="4" value={form.gpa} onChange={(event) => setForm({ ...form, gpa: event.target.value })} />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Elite Min GPA Target</label>
+            <input type="number" step="0.1" min="0" max="4" value={form.eliteMinGpa} onChange={(event) => setForm({ ...form, eliteMinGpa: event.target.value })} />
+          </div>
           <div className="form-group">
             <label className="form-label">Default Matching Strategy</label>
-            <select 
-              value={form.matchingMode} 
-              onChange={e => setForm({...form, matchingMode: e.target.value})}
+            <select
+              value={form.matchingMode}
+              onChange={(event) => setForm({ ...form, matchingMode: event.target.value })}
               style={{ width: '100%', padding: '0.75rem', borderRadius: 'var(--radius-md)', background: 'var(--bg-base)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
             >
-              <option value="Hybrid">Hybrid (Balanced)</option>
-              <option value="Performance">Performance (GPA + Skills)</option>
-              <option value="Social">Social (Karma + Engagement)</option>
+              <option value="Hybrid">Hybrid</option>
+              <option value="Performance">Performance</option>
+              <option value="Social">Social</option>
             </select>
           </div>
-          <div className="form-group" style={{ gridColumn: 'span 2' }}><label className="form-label">Skills & Tech Stack (comma separated)</label><textarea rows={3} value={form.skills} onChange={e => setForm({...form, skills: e.target.value})} /></div>
+          <div className="form-group" style={{ gridColumn: 'span 2' }}>
+            <label className="form-label">Skills & Tech Stack</label>
+            <textarea rows={3} value={form.skills} onChange={(event) => setForm({ ...form, skills: event.target.value })} />
+          </div>
         </div>
+
         <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
           <button onClick={save} className="btn btn-primary" style={{ minWidth: '160px' }}>
             Update Profile
@@ -249,157 +400,234 @@ export const ProfileScreen = () => {
   );
 };
 
-// ─── Vacancies ────────────────────────────────────────────────────────────────
 export const VacanciesScreen = () => {
   const { user } = useAuth();
-  const [vacancies, setVacancies] = useState<any[]>([]);
-  const [notification, setNotification] = useState<any>(null);
-  const [form, setForm] = useState({ 
-    projectName: '', title: 'Teammate Needed', neededRole: 'Developer', 
-    minGpa: '3.0', weeklyHours: '4', responseHours: '24', 
-    mode: 'Hybrid', description: 'Looking for a motivated teammate.' 
-  });
+  const [vacancies, setVacancies] = useState<VacancyRecord[]>([]);
+  const [notification, setNotification] = useState<ToastState>(null);
+  const [form, setForm] = useState<VacancyForm>(defaultVacancyForm());
   const [editingId, setEditingId] = useState<number | null>(null);
   const [appliedIds, setAppliedIds] = useState<number[]>([]);
 
-  useEffect(() => { 
-    Api.getVacancies().then(d => Array.isArray(d) && setVacancies(d)); 
-    Api.getApplications().then(data => {
-      if (data.outgoing) {
-        setAppliedIds(data.outgoing.map((a: any) => a.vacancyId));
-      }
+  const refreshVacancies = () => {
+    Api.getVacancies().then((data) => setVacancies(Array.isArray(data) ? data : []));
+  };
+
+  const refreshApplications = () => {
+    Api.getApplications().then((data) => {
+      const outgoing = Array.isArray(data?.outgoing) ? data.outgoing : [];
+      setAppliedIds(outgoing.map((application: { vacancyId: number }) => application.vacancyId));
     });
+  };
+
+  useEffect(() => {
+    refreshVacancies();
+    refreshApplications();
   }, []);
 
+  const resetForm = () => {
+    setEditingId(null);
+    setForm(defaultVacancyForm());
+  };
+
   const add = async () => {
-    await Api.createVacancy(form);
-    setNotification({ message: 'Vacancy posted successfully!', type: 'success' });
-    Api.getVacancies().then(d => Array.isArray(d) && setVacancies(d));
-    setForm({ ...form, projectName: '', neededRole: 'Developer' });
+    const data = await Api.createVacancy(form);
+    if (data?.error) {
+      setNotification({ message: data.error, type: 'error' });
+      return;
+    }
+
+    setNotification({ message: 'Vacancy posted successfully', type: 'success' });
+    refreshVacancies();
+    resetForm();
   };
 
   const update = async (id: number) => {
-    await Api.updateVacancy(id, form);
-    setNotification({ message: 'Vacancy updated!', type: 'success' });
-    setEditingId(null);
-    Api.getVacancies().then(d => Array.isArray(d) && setVacancies(d));
-    setForm({ ...form, projectName: '', neededRole: 'Developer' });
+    const data = await Api.updateVacancy(id, form);
+    if (data?.error) {
+      setNotification({ message: data.error, type: 'error' });
+      return;
+    }
+
+    setNotification({ message: 'Vacancy updated', type: 'success' });
+    refreshVacancies();
+    resetForm();
   };
 
-  const startEdit = (v: any) => {
-    setEditingId(v.id);
+  const startEdit = (vacancy: VacancyRecord) => {
+    setEditingId(vacancy.id);
     setForm({
-      projectName: v.projectName,
-      title: v.title,
-      neededRole: v.neededRole,
-      minGpa: v.minGpa.toString(),
-      weeklyHours: v.weeklyHours.toString(),
-      responseHours: v.responseHours.toString(),
-      mode: v.mode,
-      description: v.description
+      projectName: vacancy.projectName,
+      title: vacancy.title,
+      neededRole: vacancy.neededRole,
+      minGpa: vacancy.minGpa.toString(),
+      weeklyHours: vacancy.weeklyHours.toString(),
+      responseHours: vacancy.responseHours.toString(),
+      mode: vacancy.mode,
+      description: vacancy.description,
     });
   };
 
   const remove = async (id: number) => {
-    if (window.confirm('Are you sure you want to delete this vacancy?')) {
-      await Api.deleteVacancy(id);
-      setNotification({ message: 'Vacancy deleted', type: 'success' });
-      Api.getVacancies().then(d => Array.isArray(d) && setVacancies(d));
+    if (!window.confirm('Delete this vacancy?')) return;
+
+    const data = await Api.deleteVacancy(id);
+    if (data?.error) {
+      setNotification({ message: data.error, type: 'error' });
+      return;
     }
+
+    setNotification({ message: 'Vacancy deleted', type: 'success' });
+    refreshVacancies();
   };
 
   const handleApply = async (id: number) => {
-    await Api.apply(id);
-    setAppliedIds([...appliedIds, id]);
+    const data = await Api.apply(id);
+    if (data?.error) {
+      setNotification({ message: data.error, type: 'error' });
+      return;
+    }
+
+    setAppliedIds((prev) => [...prev, id]);
+    setNotification({ message: 'Application sent', type: 'success' });
   };
 
   return (
     <div className="screen-container animate-fade-in">
       <div>
         <h2 style={{ fontSize: '2rem', fontWeight: 800, fontFamily: 'var(--font-heading)' }}>Vacancies</h2>
-        <p style={{ color: 'var(--text-secondary)' }}>Find projects to join or recruit talent for your own.</p>
+        <p style={{ color: 'var(--text-secondary)' }}>Find projects to join or recruit teammates for your own work.</p>
       </div>
 
-      <div className="card form-container-small" style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-        <h3 style={{ fontSize: '1.1rem' }}>{editingId ? 'Edit Vacancy' : 'Post New Vacancy'}</h3>
+      <div className="card form-container-small" style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+        <h3 style={{ fontSize: '1.05rem' }}>{editingId ? 'Edit Vacancy' : 'Post New Vacancy'}</h3>
         <div className="grid" style={{ gridTemplateColumns: 'repeat(4, 1fr)', gap: '1rem', alignItems: 'end' }}>
-          <div className="form-group"><label className="form-label">Project Name</label><input value={form.projectName} onChange={e => setForm({...form, projectName: e.target.value})} placeholder="e.g. AI Matcher" /></div>
+          <div className="form-group">
+            <label className="form-label">Project Name</label>
+            <input value={form.projectName} onChange={(event) => setForm({ ...form, projectName: event.target.value })} placeholder="AI Matcher" />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Title</label>
+            <input value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} placeholder="Frontend teammate needed" />
+          </div>
           <div className="form-group">
             <label className="form-label">Role Needed</label>
-            <select 
-              value={form.neededRole} 
-              onChange={e => setForm({...form, neededRole: e.target.value})}
+            <select
+              value={form.neededRole}
+              onChange={(event) => setForm({ ...form, neededRole: event.target.value })}
               style={{ width: '100%', padding: '0.75rem', borderRadius: 'var(--radius-md)', background: 'var(--bg-base)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
             >
-              {ROLES.map(r => <option key={r} value={r}>{r}</option>)}
+              {ROLES.map((role) => (
+                <option key={role} value={role}>
+                  {role}
+                </option>
+              ))}
             </select>
           </div>
-          <div className="form-group"><label className="form-label">Min GPA</label><input type="number" step="0.1" value={form.minGpa} onChange={e => setForm({...form, minGpa: e.target.value})} /></div>
-          <div className="form-group"><label className="form-label">Weekly Hours</label><input type="number" value={form.weeklyHours} onChange={e => setForm({...form, weeklyHours: e.target.value})} /></div>
-          <div className="form-group"><label className="form-label">Response Time (h)</label><input type="number" value={form.responseHours} onChange={e => setForm({...form, responseHours: e.target.value})} /></div>
+          <div className="form-group">
+            <label className="form-label">Min GPA</label>
+            <input type="number" step="0.1" value={form.minGpa} onChange={(event) => setForm({ ...form, minGpa: event.target.value })} />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Weekly Hours</label>
+            <input type="number" value={form.weeklyHours} onChange={(event) => setForm({ ...form, weeklyHours: event.target.value })} />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Response Time (h)</label>
+            <input type="number" value={form.responseHours} onChange={(event) => setForm({ ...form, responseHours: event.target.value })} />
+          </div>
           <div className="form-group">
             <label className="form-label">Work Format</label>
-            <select value={form.mode} onChange={e => setForm({...form, mode: e.target.value})} style={{ width: '100%', padding: '0.75rem', borderRadius: 'var(--radius-md)', background: 'var(--bg-base)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}>
-              <option value="Hybrid">🏠 Hybrid</option>
-              <option value="Remote">🌐 Remote</option>
-              <option value="On-site">🏢 On-site</option>
+            <select
+              value={form.mode}
+              onChange={(event) => setForm({ ...form, mode: event.target.value })}
+              style={{ width: '100%', padding: '0.75rem', borderRadius: 'var(--radius-md)', background: 'var(--bg-base)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
+            >
+              <option value="Hybrid">Hybrid</option>
+              <option value="Remote">Remote</option>
+              <option value="On-site">On-site</option>
             </select>
+          </div>
+          <div className="form-group" style={{ gridColumn: 'span 4' }}>
+            <label className="form-label">Short Description</label>
+            <textarea
+              rows={2}
+              value={form.description}
+              onChange={(event) => setForm({ ...form, description: event.target.value })}
+              placeholder="What should a candidate know before applying?"
+            />
           </div>
           <div style={{ display: 'flex', gap: '0.5rem', gridColumn: 'span 2' }}>
             {editingId ? (
               <>
-                <button onClick={() => update(editingId)} className="btn btn-primary" style={{ flex: 1 }}>Save Changes</button>
-                <button onClick={() => { setEditingId(null); setForm({ ...form, projectName: '', neededRole: 'Developer' }); }} className="btn btn-secondary"><X size={16} /></button>
+                <button onClick={() => update(editingId)} className="btn btn-primary" style={{ flex: 1 }}>
+                  Save Changes
+                </button>
+                <button onClick={resetForm} className="btn btn-secondary">
+                  <X size={16} />
+                </button>
               </>
             ) : (
-              <button onClick={add} className="btn btn-primary" style={{ width: '100%' }}>Post Vacancy</button>
+              <button onClick={add} className="btn btn-primary" style={{ width: '100%' }}>
+                Post Vacancy
+              </button>
             )}
           </div>
         </div>
       </div>
 
-    <div className="grid" style={{ gridTemplateColumns: 'repeat(1, 1fr)', gap: '1rem' }}>
-        {vacancies.length === 0 && <p style={{ textAlign: 'center', padding: '4rem', color: 'var(--text-muted)' }}>No vacancies yet. Post the first one!</p>}
-        {vacancies.map((v: any) => (
-          <div key={v.id} className="card stat-card" style={{ borderLeft: '4px solid var(--primary)', display: 'grid', gridTemplateColumns: '1fr auto', alignItems: 'center', gap: '2rem' }}>
+      <div className="grid" style={{ gridTemplateColumns: '1fr', gap: '0.75rem' }}>
+        {vacancies.length === 0 && <p style={{ textAlign: 'center', padding: '4rem', color: 'var(--text-muted)' }}>No vacancies yet. Post the first one.</p>}
+        {vacancies.map((vacancy) => (
+          <div
+            key={vacancy.id}
+            className="card"
+            style={{ borderLeft: '3px solid var(--primary)', display: 'grid', gridTemplateColumns: '1fr auto', alignItems: 'center', gap: '1rem', padding: '0.9rem 1rem' }}
+          >
             <div>
-              <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', marginBottom: '0.5rem' }}>
-                <h3 style={{ fontWeight: 700, fontSize: '1.1rem' }}>{v.projectName}</h3>
-                <span className="pill pill-success" style={{ fontSize: '0.7rem' }}>{v.status}</span>
+              <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', marginBottom: '0.35rem', flexWrap: 'wrap' }}>
+                <h3 style={{ fontWeight: 700, fontSize: '1rem' }}>{vacancy.projectName}</h3>
+                <span className={`pill ${vacancy.status === 'Completed' ? 'pill-neutral' : 'pill-success'}`} style={{ fontSize: '0.68rem' }}>
+                  {vacancy.status}
+                </span>
               </div>
-              <div style={{ display: 'flex', gap: '1.5rem', fontSize: '0.8rem' }}>
-                <span style={{ color: 'var(--text-secondary)' }}>Role: <strong>{v.neededRole}</strong></span>
-                <span style={{ color: 'var(--text-secondary)' }}>GPA: <strong>{v.minGpa}</strong></span>
-                <span style={{ color: 'var(--text-secondary)' }}>Commitment: <strong>{v.weeklyHours}h/week</strong></span>
+              <div style={{ display: 'flex', gap: '1rem', fontSize: '0.8rem', flexWrap: 'wrap', marginBottom: vacancy.description ? '0.35rem' : 0 }}>
+                <span style={{ color: 'var(--text-secondary)' }}>Role: <strong>{vacancy.neededRole}</strong></span>
+                <span style={{ color: 'var(--text-secondary)' }}>GPA: <strong>{vacancy.minGpa}</strong></span>
+                <span style={{ color: 'var(--text-secondary)' }}>Commitment: <strong>{vacancy.weeklyHours}h/week</strong></span>
+                <span style={{ color: 'var(--text-secondary)' }}>Format: <strong>{vacancy.mode}</strong></span>
               </div>
+              {vacancy.description && <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', margin: 0 }}>{vacancy.description}</p>}
             </div>
-            
-            <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
-              <div style={{ textAlign: 'right', marginRight: '1rem' }}>
-                <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'block' }}>Posted by</span>
-                <span style={{ fontSize: '0.85rem' }}>{v.author?.name}</span>
+
+            <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+              <div style={{ textAlign: 'right', minWidth: '110px' }}>
+                <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', display: 'block' }}>Posted by</span>
+                <span style={{ fontSize: '0.82rem' }}>{vacancy.author?.name || 'Unknown'}</span>
               </div>
-              <div style={{ display: 'flex', gap: '0.5rem' }}>
-                {user?.id === v.authorId && (
+              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                {user?.id === vacancy.authorId && (
                   <>
-                    <button onClick={() => startEdit(v)} className="btn btn-secondary" style={{ padding: '0.4rem', borderRadius: '50%', width: '32px', height: '32px' }}>
+                    <button onClick={() => startEdit(vacancy)} className="btn btn-secondary" style={{ padding: '0.4rem', width: '32px', height: '32px' }}>
                       <Edit2 size={14} />
                     </button>
-                    <button onClick={() => remove(v.id)} className="btn btn-secondary" style={{ padding: '0.4rem', borderRadius: '50%', width: '32px', height: '32px', color: 'var(--danger)' }}>
+                    <button onClick={() => remove(vacancy.id)} className="btn btn-secondary" style={{ padding: '0.4rem', width: '32px', height: '32px', color: 'var(--danger)' }}>
                       <Trash2 size={14} />
                     </button>
                   </>
                 )}
-                {appliedIds.includes(v.id) ? (
+                {appliedIds.includes(vacancy.id) ? (
                   <span className="pill pill-neutral">Applied</span>
                 ) : (
-                  <button onClick={() => handleApply(v.id)} className="btn btn-primary" style={{ padding: '0.4rem 1rem', fontSize: '0.8rem' }}>Apply Now</button>
+                  <button onClick={() => handleApply(vacancy.id)} className="btn btn-primary" style={{ padding: '0.4rem 0.9rem', fontSize: '0.8rem' }}>
+                    Apply
+                  </button>
                 )}
               </div>
             </div>
           </div>
         ))}
       </div>
+
       <div className="toast-container">
         {notification && <Toast {...notification} onClose={() => setNotification(null)} />}
       </div>
@@ -407,109 +635,130 @@ export const VacanciesScreen = () => {
   );
 };
 
-// ─── Match Engine ─────────────────────────────────────────────────────────────
 export const MatchScreen = () => {
   const { user } = useAuth();
   const [mode, setMode] = useState<MatchMode>((user?.matchingMode as MatchMode) || 'Hybrid');
-  const [candidates, setCandidates] = useState<any[]>([]);
+  const [candidates, setCandidates] = useState<AppCandidate[]>([]);
   const [roleFilter, setRoleFilter] = useState('All');
-  const [results, setResults] = useState<any[]>([]);
-  const [selectedUser, setSelectedUser] = useState<any>(null);
-
-  useEffect(() => { Api.getCandidates().then(d => Array.isArray(d) && setCandidates(d)); }, []);
+  const [selectedUser, setSelectedUser] = useState<AppCandidate | null>(null);
+  const [notification, setNotification] = useState<ToastState>(null);
 
   useEffect(() => {
-    if (!user || !candidates.length) return;
-    const profile = { 
-      skills: user.skills || '', 
-      eliteMinGpa: user.eliteMinGpa || 3.0, 
-      schedule: user.schedule || '', 
-      gpa: user.gpa || 0 
-    };
-    const filtered = roleFilter === 'All' ? candidates : candidates.filter((c: any) => c.role === roleFilter);
-    setResults(MatchingEngine.rank(profile as any, filtered, mode));
-  }, [mode, roleFilter, candidates, user]);
+    Api.getCandidates().then((data) => {
+      if (data?.error) {
+        setNotification({ message: data.error, type: 'error' });
+        setCandidates([]);
+        return;
+      }
 
-  const filterRoles = ['All', ...ROLES];
+      setCandidates(Array.isArray(data) ? data : []);
+    });
+  }, []);
+
+  const results = useMemo(() => {
+    if (!user || candidates.length === 0) return [];
+
+    const profile = {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      skills: user.skills || '',
+      goal: '',
+      karma: user.karma,
+      githubCommits: user.githubCommits || 0,
+      eliteMinGpa: user.eliteMinGpa || 3.0,
+      schedule: user.schedule || '',
+      gpa: user.gpa || 0,
+    } as UserProfile;
+    const filtered = roleFilter === 'All' ? candidates : candidates.filter((candidate) => candidate.role === roleFilter);
+    return MatchingEngine.rank(profile, filtered, mode);
+  }, [candidates, mode, roleFilter, user]);
 
   return (
     <div className="screen-container animate-fade-in">
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: '1rem', flexWrap: 'wrap' }}>
         <div>
           <h2 style={{ fontSize: '2rem', fontWeight: 800, fontFamily: 'var(--font-heading)' }}>Match Engine</h2>
           <p style={{ color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <Info size={16} /> Here you can find the best candidates for your project and contact them directly.
+            <Info size={16} /> Compare candidates by performance, social fit, or a hybrid view.
           </p>
         </div>
-        <div style={{ display: 'flex', gap: '0.5rem' }}>
-          {(['Hybrid', 'Performance', 'Social'] as MatchMode[]).map(m => (
-            <button key={m} onClick={() => setMode(m)} className={`btn ${mode === m ? 'btn-primary' : 'btn-secondary'}`} style={{ padding: '0.5rem 1rem', fontSize: '0.85rem' }}>
-              {m === 'Performance' && <Zap size={14} />}
-              {m === 'Social' && <Users size={14} />}
-              {m === 'Hybrid' && <Globe size={14} />}
-              {m} Strategy
-            </button>
-          ))}
-        </div>
-      </div>
-      
-      <div className="glass-card" style={{ padding: '1.25rem', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '1rem' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-secondary)', fontSize: '0.9rem', marginRight: '0.5rem' }}>
-          <Users size={16} /> Filter by role:
-        </div>
-        <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
-          {filterRoles.map(r => (
-            <button 
-              key={r} 
-              onClick={() => setRoleFilter(r)} 
-              className={`pill ${roleFilter === r ? 'pill-success' : 'pill-neutral'}`} 
-              style={{ 
-                cursor: 'pointer', 
-                background: roleFilter === r ? 'var(--primary-glow)' : 'var(--bg-surface-hover)',
-                color: roleFilter === r ? 'var(--primary)' : 'var(--text-secondary)',
-                border: roleFilter === r ? '1px solid var(--primary)' : '1px solid var(--border)',
-                padding: '0.5rem 1.25rem',
-                fontSize: '0.85rem',
-                fontWeight: 600,
-                transition: 'var(--transition)',
-                borderRadius: 'var(--radius-md)'
-              }}
-            >
-              {r}
+        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+          {(['Hybrid', 'Performance', 'Social'] as MatchMode[]).map((strategy) => (
+            <button key={strategy} onClick={() => setMode(strategy)} className={`btn ${mode === strategy ? 'btn-primary' : 'btn-secondary'}`} style={{ padding: '0.5rem 1rem', fontSize: '0.85rem' }}>
+              {strategy === 'Performance' && <Zap size={14} />}
+              {strategy === 'Social' && <Users size={14} />}
+              {strategy === 'Hybrid' && <Globe size={14} />}
+              {strategy}
             </button>
           ))}
         </div>
       </div>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-        {results.length === 0 && <div className="card" style={{ textAlign: 'center', padding: '4rem' }}><p style={{ color: 'var(--text-secondary)' }}>No candidates found for this selection.</p></div>}
-        {results.map((r: any, i: number) => (
-          <div key={r.candidate.id} className="card" style={{ display: 'grid', gridTemplateColumns: '40px 1fr 120px 100px', gap: '1rem', alignItems: 'center', padding: '0.75rem 1rem' }}>
-            <div style={{ 
-              width: '32px', height: '32px', borderRadius: '8px', 
-              background: i < 3 ? 'var(--primary-glow)' : 'var(--bg-surface-hover)', 
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontSize: '1rem', fontWeight: 800, color: i < 3 ? 'var(--primary)' : 'var(--text-secondary)'
-            }}>
-              {i + 1}
+      <div className="glass-card" style={{ padding: '1rem 1.25rem', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0.75rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+          <Users size={16} /> Filter by role:
+        </div>
+        {['All', ...ROLES].map((role) => (
+          <button
+            key={role}
+            onClick={() => setRoleFilter(role)}
+            className={`pill ${roleFilter === role ? 'pill-success' : 'pill-neutral'}`}
+            style={{
+              cursor: 'pointer',
+              background: roleFilter === role ? 'var(--primary-glow)' : 'var(--bg-surface-hover)',
+              color: roleFilter === role ? 'var(--primary)' : 'var(--text-secondary)',
+              border: roleFilter === role ? '1px solid var(--primary)' : '1px solid var(--border)',
+              padding: '0.45rem 1rem',
+              fontSize: '0.82rem',
+              fontWeight: 600,
+            }}
+          >
+            {role}
+          </button>
+        ))}
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+        {results.length === 0 && (
+          <div className="card" style={{ textAlign: 'center', padding: '4rem' }}>
+            <p style={{ color: 'var(--text-secondary)' }}>No candidates found for this selection.</p>
+          </div>
+        )}
+        {results.map((result, index) => (
+          <div key={result.candidate.id} className="card" style={{ display: 'grid', gridTemplateColumns: '36px 1fr 120px 88px', gap: '0.9rem', alignItems: 'center', padding: '0.8rem 1rem' }}>
+            <div
+              style={{
+                width: '30px',
+                height: '30px',
+                borderRadius: '8px',
+                background: index < 3 ? 'var(--primary-glow)' : 'var(--bg-surface-hover)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: '0.9rem',
+                fontWeight: 800,
+                color: index < 3 ? 'var(--primary)' : 'var(--text-secondary)',
+              }}
+            >
+              {index + 1}
             </div>
             <div>
-              <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
-                <h3 style={{ fontSize: '1rem', fontWeight: 700 }}>{r.candidate.name}</h3>
-                <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>{r.candidate.role}</span>
+              <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                <h3 style={{ fontSize: '0.98rem', fontWeight: 700 }}>{result.candidate.name}</h3>
+                <span style={{ fontSize: '0.74rem', color: 'var(--text-secondary)' }}>{result.candidate.role}</span>
               </div>
-              <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '400px' }}>{r.explanation}</p>
+              <p style={{ fontSize: '0.76rem', color: 'var(--text-muted)', margin: '0.15rem 0 0' }}>{result.explanation}</p>
             </div>
             <div style={{ textAlign: 'center' }}>
-              <span className={`pill ${r.risk.includes('High') || r.risk.includes('Critical') ? 'pill-danger' : 'pill-success'}`} style={{ fontSize: '0.65rem', padding: '0.1rem 0.4rem' }}>{r.risk}</span>
-              <div style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--primary)' }}>{r.total}%</div>
+              <span className={`pill ${result.risk.includes('High') || result.risk.includes('Critical') ? 'pill-danger' : 'pill-success'}`} style={{ fontSize: '0.64rem', padding: '0.1rem 0.4rem' }}>
+                {result.risk}
+              </span>
+              <div style={{ fontSize: '1.15rem', fontWeight: 800, color: 'var(--primary)' }}>{result.total}%</div>
             </div>
             <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-              <button 
-                onClick={() => setSelectedUser(r.candidate)}
-                className="btn btn-secondary" 
-                style={{ padding: '0.3rem 0.6rem', fontSize: '0.7rem' }}
-              >
+              <button onClick={() => setSelectedUser(result.candidate)} className="btn btn-secondary" style={{ padding: '0.3rem 0.6rem', fontSize: '0.72rem' }}>
                 Profile
               </button>
             </div>
@@ -518,85 +767,102 @@ export const MatchScreen = () => {
       </div>
 
       <UserDetailModal user={selectedUser} onClose={() => setSelectedUser(null)} />
+
+      <div className="toast-container">
+        {notification && <Toast {...notification} onClose={() => setNotification(null)} />}
+      </div>
     </div>
   );
 };
 
-const UserDetailModal = ({ user, onClose }: any) => {
-  return (
-    <Modal isOpen={!!user} onClose={onClose} title="Candidate Profile">
-      {user && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
-            <div style={{ width: '80px', height: '80px', borderRadius: '24px', background: 'var(--primary-glow)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '2rem', fontWeight: 800, color: 'var(--primary)' }}>
-              {user.name[0]}
-            </div>
-            <div>
-              <h3 style={{ fontSize: '1.5rem' }}>{user.name}</h3>
-              <p style={{ color: 'var(--text-secondary)' }}>{user.role} · GPA {user.gpa}</p>
-            </div>
+const UserDetailModal = ({ user, onClose }: { user: AppCandidate | null; onClose: () => void }) => (
+  <Modal isOpen={Boolean(user)} onClose={onClose} title="Candidate Profile">
+    {user && (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+          <div style={{ width: '72px', height: '72px', borderRadius: '20px', background: 'var(--primary-glow)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.8rem', fontWeight: 800, color: 'var(--primary)' }}>
+            {user.name[0]}
           </div>
-
-          <div className="grid" style={{ gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-            <div className="card" style={{ padding: '1.25rem' }}>
-              <span className="text-muted" style={{ fontSize: '0.8rem' }}>Karma Status</span>
-              <div style={{ fontSize: '1.25rem', fontWeight: 700, color: 'var(--warning)' }}>{user.karma} Points</div>
-            </div>
-            <div className="card" style={{ padding: '1.25rem' }}>
-              <span className="text-muted" style={{ fontSize: '0.8rem' }}>Projects Completed</span>
-              <div style={{ fontSize: '1.25rem', fontWeight: 700, color: 'var(--success)' }}>{user.completedProjects} Finished</div>
-            </div>
-          </div>
-
           <div>
-            <h4 style={{ fontSize: '1rem', marginBottom: '0.75rem' }}>Skills & Expertise</h4>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
-              {user?.skills?.split(',').filter(Boolean).map((s: string) => (
-                <span key={s} className="pill pill-neutral">{s.trim()}</span>
-              )) || <span style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>No skills listed</span>}
-            </div>
-          </div>
-
-          <div style={{ borderTop: '1px solid var(--border)', paddingTop: '1.5rem', marginTop: '0.5rem', display: 'flex', justifyContent: 'flex-end' }}>
-            <button className="btn btn-primary" onClick={() => { alert(`Contacting ${user.name} via ${user.email || 'university email'}...`); onClose(); }}>
-              <Mail size={18} /> Contact for Interview
-            </button>
+            <h3 style={{ fontSize: '1.35rem' }}>{user.name}</h3>
+            <p style={{ color: 'var(--text-secondary)' }}>{user.role} | GPA {user.gpa}</p>
           </div>
         </div>
-      )}
-    </Modal>
-  );
-};
+
+        <div className="grid" style={{ gridTemplateColumns: '1fr 1fr', gap: '0.85rem' }}>
+          <div className="card" style={{ padding: '1rem' }}>
+            <span className="text-muted" style={{ fontSize: '0.78rem' }}>Karma</span>
+            <div style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--warning)' }}>{user.karma} points</div>
+          </div>
+          <div className="card" style={{ padding: '1rem' }}>
+            <span className="text-muted" style={{ fontSize: '0.78rem' }}>Projects Completed</span>
+            <div style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--success)' }}>{user.completedProjects ?? 0}</div>
+          </div>
+        </div>
+
+        <div>
+          <h4 style={{ fontSize: '0.95rem', marginBottom: '0.65rem' }}>Skills</h4>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.45rem' }}>
+            {user.skills
+              .split(',')
+              .map((skill) => skill.trim())
+              .filter(Boolean)
+              .map((skill) => (
+                <span key={skill} className="pill pill-neutral">
+                  {skill}
+                </span>
+              ))}
+          </div>
+        </div>
+
+        <div style={{ borderTop: '1px solid var(--border)', paddingTop: '1rem', display: 'flex', justifyContent: 'flex-end' }}>
+          <button className="btn btn-primary" onClick={onClose}>
+            <Mail size={18} /> Close
+          </button>
+        </div>
+      </div>
+    )}
+  </Modal>
+);
 
 export const ProjectsScreen = () => {
-  const [projects, setProjects] = useState<any[]>([]);
+  const [projects, setProjects] = useState<ProjectRecord[]>([]);
   const [loading, setLoading] = useState(true);
-  const [notification, setNotification] = useState<any>(null);
+  const [notification, setNotification] = useState<ToastState>(null);
 
-  const fetch = () => {
-    Api.getMyProjects().then(d => {
-      setProjects(Array.isArray(d) ? d : []);
+  const fetchProjects = () => {
+    Api.getMyProjects().then((data) => {
+      setProjects(Array.isArray(data) ? data : []);
       setLoading(false);
     });
   };
 
-  useEffect(() => { fetch(); }, []);
+  useEffect(() => {
+    fetchProjects();
+  }, []);
 
   return (
     <div className="screen-container animate-fade-in">
-      <div style={{ marginBottom: '2rem' }}>
+      <div style={{ marginBottom: '1rem' }}>
         <h2 style={{ fontSize: '2rem', fontWeight: 800, fontFamily: 'var(--font-heading)' }}>My Projects</h2>
-        <p style={{ color: 'var(--text-secondary)' }}>Teams you are leading or part of</p>
+        <p style={{ color: 'var(--text-secondary)' }}>Teams you are leading or contributing to.</p>
       </div>
 
-      {loading ? <Loader className="animate-spin" /> : (
-        projects.length === 0 ? (
-          <div className="card" style={{ textAlign: 'center', padding: '4rem' }}>
-            <p style={{ color: 'var(--text-secondary)' }}>You are not part of any active projects yet.</p>
-          </div>
-        ) : (
-          projects.map(p => <ProjectCard key={p.id} project={p} onRefresh={fetch} onNotify={(msg: string, type: string) => setNotification({ message: msg, type })} />)
-        )
+      {loading ? (
+        <Loader className="animate-spin" />
+      ) : projects.length === 0 ? (
+        <div className="card" style={{ textAlign: 'center', padding: '4rem' }}>
+          <p style={{ color: 'var(--text-secondary)' }}>You are not part of any active projects yet.</p>
+        </div>
+      ) : (
+        projects.map((project) => (
+          <ProjectCard
+            key={project.id}
+            project={project}
+            onRefresh={fetchProjects}
+            onNotify={(message, type) => setNotification({ message, type })}
+          />
+        ))
       )}
 
       <div className="toast-container">
@@ -606,70 +872,84 @@ export const ProjectsScreen = () => {
   );
 };
 
-// ─── AI Assistant ─────────────────────────────────────────────────────────────
 export const AiScreen = () => {
-  const [messages, setMessages] = useState<{ sender: string; text: string }[]>([
-    { sender: 'assistant', text: 'Hi! I\'m powered by Gemini 1.5 Flash and have access to your real candidate database. How can I help you build your perfect team today?' }
+  const [messages, setMessages] = useState<Array<{ sender: string; text: string }>>([
+    {
+      sender: 'assistant',
+      text: 'Hi! I am powered by Gemini 2.5 Flash and can use your live candidate and vacancy data for recommendations, risk checks, and team decisions.',
+    },
   ]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
 
   const send = async () => {
     if (!input.trim() || loading) return;
-    const userMsg = input;
+
+    const userMessage = input.trim();
     setInput('');
-    setMessages(prev => [...prev, { sender: 'user', text: userMsg }]);
+    setMessages((prev) => [...prev, { sender: 'user', text: userMessage }]);
     setLoading(true);
-    const data = await Api.chat(userMsg);
-    setLoading(false);
-    setMessages(prev => [...prev, { sender: 'assistant', text: data.answer || data.error || 'Error getting response.' }]);
+
+    try {
+      const data = await Api.chat(userMessage);
+      setMessages((prev) => [...prev, { sender: 'assistant', text: data.answer || data.error || 'Error getting response.' }]);
+    } catch {
+      setMessages((prev) => [...prev, { sender: 'assistant', text: 'The assistant is temporarily unavailable. Please try again in a moment.' }]);
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
     <div className="screen-container animate-fade-in" style={{ height: 'calc(100vh - 8rem)' }}>
-      <div style={{ marginBottom: '1.5rem' }}>
+      <div style={{ marginBottom: '1rem' }}>
         <h2 style={{ fontSize: '1.75rem', fontWeight: 800, fontFamily: 'var(--font-heading)' }}>AI Assistant</h2>
-        <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Intelligent recruitment & risk analysis</p>
+        <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Recruitment analysis, fit checks, and risk summaries.</p>
       </div>
-      
-      <div className="glass-card" style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', padding: '1.25rem' }}>
-        <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '1rem', paddingRight: '0.5rem', marginBottom: '1.25rem' }}>
-          {messages.map((m, i) => (
-            <div key={i} style={{
-              maxWidth: '85%', 
-              padding: '1rem 1.25rem', 
-              borderRadius: '1.25rem',
-              alignSelf: m.sender === 'user' ? 'flex-end' : 'flex-start',
-              background: m.sender === 'user' ? 'linear-gradient(135deg, var(--primary), var(--primary-dark))' : 'var(--bg-surface-hover)',
-              border: m.sender === 'user' ? 'none' : '1px solid var(--border)',
-              borderBottomRightRadius: m.sender === 'user' ? '4px' : '1.25rem',
-              borderBottomLeftRadius: m.sender === 'assistant' ? '4px' : '1.25rem',
-              color: m.sender === 'user' ? '#fff' : 'var(--text-primary)',
-              whiteSpace: 'pre-wrap', 
-              lineHeight: 1.6,
-              fontSize: '0.9rem'
-            }}>
-              {m.text}
+
+      <div className="glass-card" style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', padding: '1.1rem' }}>
+        <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.9rem', paddingRight: '0.4rem', marginBottom: '1rem' }}>
+          {messages.map((message, index) => (
+            <div
+              key={index}
+              style={{
+                maxWidth: '85%',
+                padding: '0.9rem 1.1rem',
+                borderRadius: '1.1rem',
+                alignSelf: message.sender === 'user' ? 'flex-end' : 'flex-start',
+                background: message.sender === 'user' ? 'linear-gradient(135deg, var(--primary), var(--primary-dark))' : 'var(--bg-surface-hover)',
+                border: message.sender === 'user' ? 'none' : '1px solid var(--border)',
+                borderBottomRightRadius: message.sender === 'user' ? '4px' : '1.1rem',
+                borderBottomLeftRadius: message.sender === 'assistant' ? '4px' : '1.1rem',
+                color: message.sender === 'user' ? '#fff' : 'var(--text-primary)',
+                whiteSpace: 'pre-wrap',
+                lineHeight: 1.55,
+                fontSize: '0.9rem',
+              }}
+            >
+              {message.text}
             </div>
           ))}
           {loading && (
-            <div style={{ alignSelf: 'flex-start', padding: '0.75rem', background: 'var(--bg-surface-hover)', borderRadius: '1rem', display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+            <div style={{ alignSelf: 'flex-start', padding: '0.7rem 0.85rem', background: 'var(--bg-surface-hover)', borderRadius: '1rem', display: 'flex', gap: '0.45rem', alignItems: 'center' }}>
               <Loader size={16} className="animate-spin" style={{ color: 'var(--primary)' }} />
               <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Thinking...</span>
             </div>
           )}
           <div ref={bottomRef} />
         </div>
-        
-        <div style={{ display: 'flex', gap: '1rem', background: 'var(--bg-base)', padding: '0.5rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)' }}>
+
+        <div style={{ display: 'flex', gap: '0.75rem', background: 'var(--bg-base)', padding: '0.5rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)' }}>
           <input
             value={input}
-            onChange={e => setInput(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && send()}
-            placeholder="Ask about candidates or risks..."
+            onChange={(event) => setInput(event.target.value)}
+            onKeyDown={(event) => event.key === 'Enter' && send()}
+            placeholder="Ask about candidates, vacancies, or team risks..."
             style={{ flex: 1, background: 'transparent', border: 'none', boxShadow: 'none', padding: '0.5rem', fontSize: '0.9rem' }}
           />
           <button onClick={send} disabled={loading || !input.trim()} className="btn btn-primary" style={{ padding: '0 1rem', height: '40px' }}>
@@ -681,28 +961,40 @@ export const AiScreen = () => {
   );
 };
 
-// ─── Team Chat Screen ──────────────────────────────────────────────────────────
 export const ChatScreen = () => {
   const { vacancyId } = useParams();
   const { user } = useAuth();
   const navigate = useNavigate();
-  const [messages, setMessages] = useState<any[]>([]);
+  const [messages, setMessages] = useState<ProjectMessage[]>([]);
   const [text, setText] = useState('');
-  const [project, setProject] = useState<any>(null);
+  const [project, setProject] = useState<ProjectRecord | null>(null);
+  const [notification, setNotification] = useState<ToastState>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (vacancyId) {
-      Api.getProjectMessages(parseInt(vacancyId)).then(setMessages);
-      Api.getMyProjects().then(projects => {
-        const p = projects.find((p: any) => p.id === parseInt(vacancyId));
-        setProject(p);
+    if (!vacancyId) return;
+
+    const id = Number(vacancyId);
+
+    const fetchMessages = () => {
+      Api.getProjectMessages(id).then((data) => {
+        if (data?.error) {
+          setNotification({ message: data.error, type: 'error' });
+          return;
+        }
+
+        setMessages(Array.isArray(data) ? data : []);
       });
-      const interval = setInterval(() => {
-        Api.getProjectMessages(parseInt(vacancyId)).then(setMessages);
-      }, 3000);
-      return () => clearInterval(interval);
-    }
+    };
+
+    fetchMessages();
+    Api.getMyProjects().then((projects) => {
+      const list = Array.isArray(projects) ? projects : [];
+      setProject(list.find((item: ProjectRecord) => item.id === id) || null);
+    });
+
+    const intervalId = window.setInterval(fetchMessages, 2500);
+    return () => window.clearInterval(intervalId);
   }, [vacancyId]);
 
   useEffect(() => {
@@ -711,8 +1003,14 @@ export const ChatScreen = () => {
 
   const send = async () => {
     if (!text.trim() || !vacancyId) return;
-    const msg = await Api.sendProjectMessage(parseInt(vacancyId), text);
-    setMessages([...messages, msg]);
+
+    const response = await Api.sendProjectMessage(Number(vacancyId), text.trim());
+    if (response?.error) {
+      setNotification({ message: response.error, type: 'error' });
+      return;
+    }
+
+    setMessages((prev) => [...prev, response]);
     setText('');
   };
 
@@ -721,27 +1019,27 @@ export const ChatScreen = () => {
       <div className="chat-page-container">
         <div className="chat-header">
           <div>
-            <h2 style={{ fontSize: '1.25rem' }}>{project?.projectName || 'Project Chat'}</h2>
-            <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Team Communication</p>
+            <h2 style={{ fontSize: '1.2rem' }}>{project?.projectName || 'Project Chat'}</h2>
+            <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Team communication for active project members.</p>
           </div>
           <button onClick={() => navigate('/projects')} className="btn btn-secondary">
             <X size={18} /> Exit Chat
           </button>
         </div>
         <div className="chat-messages-area">
-          {messages.map((m: any) => (
-            <div key={m.id} className={`chat-bubble ${m.senderId === user?.id ? 'mine' : 'theirs'}`}>
-              <div style={{ fontSize: '0.7rem', opacity: 0.8, marginBottom: '0.2rem', fontWeight: 600 }}>{m.sender.name}</div>
-              {m.text}
+          {messages.map((message) => (
+            <div key={message.id} className={`chat-bubble ${message.senderId === user?.id ? 'mine' : 'theirs'}`}>
+              <div style={{ fontSize: '0.7rem', opacity: 0.8, marginBottom: '0.2rem', fontWeight: 600 }}>{message.sender.name}</div>
+              {message.text}
             </div>
           ))}
           <div ref={scrollRef} />
         </div>
         <div className="chat-input-area">
-          <input 
-            value={text} 
-            onChange={e => setText(e.target.value)} 
-            onKeyDown={e => e.key === 'Enter' && send()}
+          <input
+            value={text}
+            onChange={(event) => setText(event.target.value)}
+            onKeyDown={(event) => event.key === 'Enter' && send()}
             placeholder="Type a message to the team..."
             style={{ borderRadius: 'var(--radius-md)' }}
           />
@@ -750,74 +1048,103 @@ export const ChatScreen = () => {
           </button>
         </div>
       </div>
+
+      <div className="toast-container">
+        {notification && <Toast {...notification} onClose={() => setNotification(null)} />}
+      </div>
     </div>
   );
 };
 
-// ─── Project Card Component ──────────────────────────────────────────────────
-const ProjectCard = ({ project, onRefresh, onNotify }: { project: any; onRefresh: () => void, onNotify?: (msg: string, type: string) => void }) => {
+const ProjectCard = ({
+  project,
+  onRefresh,
+  onNotify,
+}: {
+  project: ProjectRecord;
+  onRefresh: () => void;
+  onNotify?: (message: string, type: ToastType) => void;
+}) => {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const isAuthor = user?.id === project.authorId;
-  const [chatOpen, setChatOpen] = useState(false);
-  const [ratingTarget, setRatingTarget] = useState<any>(null);
+  const [ratingTarget, setRatingTarget] = useState<ProjectMember | null>(null);
   const [ratingForm, setRatingForm] = useState({ rating: 5, teamwork: 5, reliability: 5, comment: '' });
 
   const handleFinish = async () => {
-    if (window.confirm('Are you sure you want to finish this project? All members will receive +1 to completed projects.')) {
-      await Api.finishProject(project.id);
-      onNotify?.('Project completed successfully!', 'success');
-      onRefresh();
+    if (!window.confirm('Finish this project and increment completed projects for the team?')) return;
+
+    const data = await Api.finishProject(project.id);
+    if (data?.error) {
+      onNotify?.(data.error, 'error');
+      return;
     }
+
+    onNotify?.('Project completed successfully', 'success');
+    onRefresh();
   };
 
   const handleRate = async () => {
-    await Api.submitReview({ ...ratingForm, candidateId: ratingTarget.id });
+    if (!ratingTarget) return;
+
+    const data = await Api.submitReview({ ...ratingForm, candidateId: ratingTarget.id });
+    if (data?.error) {
+      onNotify?.(data.error, 'error');
+      return;
+    }
+
     setRatingTarget(null);
     setRatingForm({ rating: 5, teamwork: 5, reliability: 5, comment: '' });
-    onNotify?.('Rating submitted successfully!', 'success');
+    onNotify?.('Review submitted', 'success');
   };
 
-  const members = [
+  const members: ProjectMember[] = [
     { ...project.author, isAuthor: true },
-    ...(project.applications || []).filter((a: any) => a.status === 'Accepted').map((a: any) => ({ ...a.candidate, isAuthor: false }))
+    ...(project.applications || [])
+      .filter((application) => application.status === 'Accepted')
+      .map((application) => ({ ...application.candidate, isAuthor: false })),
   ];
 
   return (
-    <div className="card" style={{ padding: '1.25rem', marginBottom: '1.25rem' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '2rem' }}>
+    <div className="card" style={{ padding: '1.1rem 1.2rem', marginBottom: '1rem' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.2rem', gap: '1rem', flexWrap: 'wrap' }}>
         <div>
-          <h4 style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--primary)' }}>{project.projectName}</h4>
-          <p style={{ color: 'var(--text-secondary)' }}>{project.title} · {project.neededRole}</p>
+          <h4 style={{ fontSize: '1.2rem', fontWeight: 700, color: 'var(--primary)' }}>{project.projectName}</h4>
+          <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>{project.title} | {project.neededRole}</p>
         </div>
-        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center', flexWrap: 'wrap' }}>
           <button onClick={() => navigate(`/chat/${project.id}`)} className="btn btn-secondary" style={{ padding: '0.4rem 1rem', fontSize: '0.8rem' }}>
             <MessageSquare size={16} /> Open Group Chat
           </button>
           <span className={`pill ${project.status === 'Completed' ? 'pill-neutral' : 'pill-success'}`}>{project.status}</span>
           {isAuthor && project.status !== 'Completed' && (
-            <button onClick={handleFinish} className="btn btn-primary" style={{ padding: '0.5rem 1rem', fontSize: '0.85rem' }}>
+            <button onClick={handleFinish} className="btn btn-primary" style={{ padding: '0.45rem 0.9rem', fontSize: '0.82rem' }}>
               <CheckCircle size={16} /> Finish Project
             </button>
           )}
         </div>
       </div>
 
-      <div style={{ marginBottom: '1.5rem' }}>
-        <h5 style={{ fontSize: '0.9rem', textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: '1rem', letterSpacing: '0.05em' }}>Project Members ({members.length})</h5>
-        <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(250px, 1fr))', gap: '1rem' }}>
-          {members.map((m: any) => (
-            <div key={m.id} className="glass-card" style={{ padding: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+      <div>
+        <h5 style={{ fontSize: '0.82rem', textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: '0.8rem', letterSpacing: '0.04em' }}>
+          Project Members ({members.length})
+        </h5>
+        <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: '0.85rem' }}>
+          {members.map((member) => (
+            <div key={member.id} className="glass-card" style={{ padding: '0.9rem 1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.7rem' }}>
                 <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: 'var(--primary-glow)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.8rem', fontWeight: 700, color: 'var(--primary)' }}>
-                  {m.name[0]}
+                  {member.name[0]}
                 </div>
                 <div>
-                  <div style={{ fontWeight: 600, fontSize: '0.9rem' }}>{m.name} {m.id === user?.id && '(You)'}</div>
-                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{m.isAuthor ? 'Project Lead' : m.role}</div>
+                  <div style={{ fontWeight: 600, fontSize: '0.88rem' }}>
+                    {member.name} {member.id === user?.id ? '(You)' : ''}
+                  </div>
+                  <div style={{ fontSize: '0.74rem', color: 'var(--text-secondary)' }}>{member.isAuthor ? 'Project Lead' : member.role}</div>
                 </div>
               </div>
-              {project.status === 'Completed' && m.id !== user?.id && (
-                <button onClick={() => setRatingTarget(m)} className="btn btn-secondary" style={{ padding: '0.4rem', borderRadius: '50%', width: '32px', height: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              {project.status === 'Completed' && member.id !== user?.id && (
+                <button onClick={() => setRatingTarget(member)} className="btn btn-secondary" style={{ padding: '0.4rem', width: '32px', height: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                   <Star size={14} />
                 </button>
               )}
@@ -826,33 +1153,47 @@ const ProjectCard = ({ project, onRefresh, onNotify }: { project: any; onRefresh
         </div>
       </div>
 
-      <GroupChatModal isOpen={chatOpen} onClose={() => setChatOpen(false)} vacancyId={project.id} projectName={project.projectName} />
-
-      <Modal isOpen={!!ratingTarget} onClose={() => setRatingTarget(null)} title={`Rate ${ratingTarget?.name}`}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-          <div className="form-group">
-            <label className="form-label">Overall Contribution (1-10)</label>
-            <input type="range" min="1" max="10" value={ratingForm.rating} onChange={e => setRatingForm({...ratingForm, rating: parseInt(e.target.value)})} />
-            <div style={{ textAlign: 'center', fontWeight: 700 }}>{ratingForm.rating}</div>
+      <Modal isOpen={Boolean(ratingTarget)} onClose={() => setRatingTarget(null)} title={`Rate ${ratingTarget?.name || 'teammate'}`}>
+        <div className="rating-modal">
+          <div className="rating-row">
+            <div>
+              <label className="form-label">Overall Contribution</label>
+              <p className="rating-help">How much real value this teammate added to delivery.</p>
+            </div>
+            <div className="rating-control">
+              <input className="rating-slider" type="range" min="1" max="10" value={ratingForm.rating} onChange={(event) => setRatingForm({ ...ratingForm, rating: Number(event.target.value) })} />
+              <div className="rating-value">{ratingForm.rating}</div>
+            </div>
           </div>
-          <div className="form-group">
-            <label className="form-label">Teamwork & Communication (1-10)</label>
-            <input type="range" min="1" max="10" value={ratingForm.teamwork} onChange={e => setRatingForm({...ratingForm, teamwork: parseInt(e.target.value)})} />
-            <div style={{ textAlign: 'center', fontWeight: 700 }}>{ratingForm.teamwork}</div>
+          <div className="rating-row">
+            <div>
+              <label className="form-label">Teamwork & Communication</label>
+              <p className="rating-help">How clearly they communicated and collaborated in the team.</p>
+            </div>
+            <div className="rating-control">
+              <input className="rating-slider" type="range" min="1" max="10" value={ratingForm.teamwork} onChange={(event) => setRatingForm({ ...ratingForm, teamwork: Number(event.target.value) })} />
+              <div className="rating-value">{ratingForm.teamwork}</div>
+            </div>
           </div>
-          <div className="form-group">
-            <label className="form-label">Reliability & Commitment (1-10)</label>
-            <input type="range" min="1" max="10" value={ratingForm.reliability} onChange={e => setRatingForm({...ratingForm, reliability: parseInt(e.target.value)})} />
-            <div style={{ textAlign: 'center', fontWeight: 700 }}>{ratingForm.reliability}</div>
+          <div className="rating-row">
+            <div>
+              <label className="form-label">Reliability & Commitment</label>
+              <p className="rating-help">Whether they were dependable, responsive, and completed their part.</p>
+            </div>
+            <div className="rating-control">
+              <input className="rating-slider" type="range" min="1" max="10" value={ratingForm.reliability} onChange={(event) => setRatingForm({ ...ratingForm, reliability: Number(event.target.value) })} />
+              <div className="rating-value">{ratingForm.reliability}</div>
+            </div>
           </div>
           <div className="form-group">
             <label className="form-label">Review Comment</label>
-            <textarea value={ratingForm.comment} onChange={e => setRatingForm({...ratingForm, comment: e.target.value})} placeholder="What was it like working with them?" rows={3} />
+            <textarea value={ratingForm.comment} onChange={(event) => setRatingForm({ ...ratingForm, comment: event.target.value })} rows={3} placeholder="What was it like working with them?" />
           </div>
-          <button onClick={handleRate} className="btn btn-primary" style={{ width: '100%' }}>Submit Review</button>
+          <button onClick={handleRate} className="btn btn-primary" style={{ width: '100%' }}>
+            Submit Review
+          </button>
         </div>
       </Modal>
     </div>
   );
 };
-

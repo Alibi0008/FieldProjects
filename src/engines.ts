@@ -14,9 +14,9 @@ export const MatchingEngine = {
       const scheduleMatch = profile.schedule === candidate.schedule ? 100 : 50;
       const social = Math.round(karma * 0.5 + Math.min(100, commits * 2) * 0.3 + scheduleMatch * 0.2);
 
-      let total = 0;
-      let risk = '';
-      let explanation = '';
+      let total: number;
+      let risk: string;
+      let explanation: string;
 
       if (mode === 'Performance') {
         total = Math.round(performance * 0.8 + social * 0.2);
