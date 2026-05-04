@@ -258,6 +258,54 @@ app.post('/api/applications', auth, async (req: any, res) => {
   }
 });
 
+app.post('/api/applications/invite', auth, async (req: any, res) => {
+  const vacancyId = parseInt(req.body.vacancyId);
+  const candidateId = parseInt(req.body.candidateId);
+
+  if (Number.isNaN(vacancyId) || Number.isNaN(candidateId)) {
+    return res.status(400).json({ error: 'Vacancy and candidate are required' });
+  }
+
+  const vacancy = await prisma.vacancy.findUnique({ where: { id: vacancyId } });
+  if (!vacancy || vacancy.authorId !== req.user.id) {
+    return res.status(403).json({ error: 'You can invite candidates only to your own vacancies' });
+  }
+
+  if (vacancy.status !== 'Open') {
+    return res.status(400).json({ error: 'Only open vacancies can send invitations' });
+  }
+
+  if (candidateId === req.user.id) {
+    return res.status(400).json({ error: 'You cannot invite yourself' });
+  }
+
+  const candidate = await prisma.user.findUnique({ where: { id: candidateId } });
+  if (!candidate) {
+    return res.status(404).json({ error: 'Candidate not found' });
+  }
+
+  const existing = await prisma.application.findFirst({
+    where: {
+      vacancyId,
+      candidateId
+    }
+  });
+
+  if (existing) {
+    return res.status(400).json({ error: 'This candidate already has an application or invite for the selected vacancy' });
+  }
+
+  const invitation = await prisma.application.create({
+    data: {
+      vacancyId,
+      candidateId,
+      status: 'Invited'
+    }
+  });
+
+  res.json(invitation);
+});
+
 app.get('/api/applications', auth, async (req: any, res) => {
   const incoming = await prisma.application.findMany({
     where: { vacancy: { authorId: req.user.id } },
@@ -269,10 +317,27 @@ app.get('/api/applications', auth, async (req: any, res) => {
 
   const outgoing = await prisma.application.findMany({
     where: { candidateId: req.user.id },
-    select: { vacancyId: true }
+    select: { vacancyId: true, status: true }
   });
 
-  res.json({ incoming, outgoing });
+  const invitations = await prisma.application.findMany({
+    where: { candidateId: req.user.id, status: 'Invited' },
+    include: {
+      vacancy: {
+        select: {
+          id: true,
+          projectName: true,
+          neededRole: true,
+          minGpa: true,
+          weeklyHours: true,
+          mode: true,
+          author: { select: { id: true, name: true, role: true } }
+        }
+      }
+    }
+  });
+
+  res.json({ incoming, outgoing, invitations });
 });
 
 app.put('/api/applications/:id', auth, async (req: any, res) => {
@@ -283,7 +348,15 @@ app.put('/api/applications/:id', auth, async (req: any, res) => {
     include: { vacancy: { select: { authorId: true } } }
   });
 
-  if (!applicationRecord || applicationRecord.vacancy.authorId !== req.user.id) {
+  if (!applicationRecord) {
+    return res.status(404).json({ error: 'Application not found' });
+  }
+
+  const isOwner = applicationRecord.vacancy.authorId === req.user.id;
+  const isInvitedCandidate = applicationRecord.candidateId === req.user.id && applicationRecord.status === 'Invited';
+  const candidateAllowedStatuses = ['Accepted', 'Rejected'];
+
+  if (!isOwner && !(isInvitedCandidate && candidateAllowedStatuses.includes(status))) {
     return res.status(403).json({ error: 'Unauthorized to update this application' });
   }
 

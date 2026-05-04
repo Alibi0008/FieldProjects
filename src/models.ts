@@ -61,7 +61,7 @@ export interface Application {
   id: number;
   vacancyId: number;
   candidateId: number;
-  status: string; // 'Pending' | 'Accepted' | 'Rejected'
+  status: string; // 'Pending' | 'Invited' | 'Accepted' | 'Rejected'
   createdAt: string;
 }
 

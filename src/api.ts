@@ -9,14 +9,30 @@ const headers = () => ({
   'Authorization': `Bearer ${getToken()}`,
 });
 
-const request = async (path: string, init?: RequestInit) => {
+const request = async (path: string, init?: RequestInit): Promise<any> => {
   try {
     const response = await fetch(`${BASE}${path}`, init);
     const text = await response.text();
-    const data = text ? JSON.parse(text) : {};
+    let data: any = {};
+
+    if (text) {
+      try {
+        data = JSON.parse(text);
+      } catch {
+        data = text;
+      }
+    }
 
     if (!response.ok) {
-      return data?.error ? data : { error: `Request failed (${response.status})` };
+      if (typeof data === 'object' && data !== null && 'error' in data) {
+        return data;
+      }
+
+      if (typeof data === 'string' && data.trim()) {
+        return { error: data };
+      }
+
+      return { error: `Request failed (${response.status})` };
     }
 
     return data;
@@ -60,6 +76,13 @@ export const Api = {
   // Applications
   async apply(vacancyId: number) {
     return request('/applications', { method: 'POST', headers: headers(), body: JSON.stringify({ vacancyId }) });
+  },
+  async inviteCandidate(vacancyId: number, candidateId: number) {
+    return request('/applications/invite', {
+      method: 'POST',
+      headers: headers(),
+      body: JSON.stringify({ vacancyId, candidateId })
+    });
   },
   async getApplications() {
     return request('/applications', { headers: headers() });

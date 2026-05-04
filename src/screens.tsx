@@ -9,7 +9,6 @@ import {
   Globe,
   Info,
   Loader,
-  Mail,
   MessageSquare,
   Send,
   Star,
@@ -49,6 +48,29 @@ type IncomingApplication = {
   vacancy: {
     projectName: string;
     neededRole: string;
+  };
+};
+
+type OutgoingApplication = {
+  vacancyId: number;
+  status: string;
+};
+
+type InvitationApplication = {
+  id: number;
+  status: string;
+  vacancy: {
+    id: number;
+    projectName: string;
+    neededRole: string;
+    minGpa: number;
+    weeklyHours: number;
+    mode: string;
+    author: {
+      id: number;
+      name: string;
+      role: string;
+    };
   };
 };
 
@@ -92,6 +114,11 @@ type ProjectMessage = {
     name: string;
     role: string;
   };
+};
+
+type InviteState = {
+  candidate: AppCandidate;
+  vacancyId: string;
 };
 
 type VacancyForm = {
@@ -185,6 +212,7 @@ export const DashboardScreen = () => {
   const [candidateCount, setCandidateCount] = useState(0);
   const [vacancyCount, setVacancyCount] = useState(0);
   const [incomingApps, setIncomingApps] = useState<IncomingApplication[]>([]);
+  const [invitations, setInvitations] = useState<InvitationApplication[]>([]);
   const [myProjects, setMyProjects] = useState<ProjectRecord[]>([]);
   const [notification, setNotification] = useState<ToastState>(null);
 
@@ -192,7 +220,10 @@ export const DashboardScreen = () => {
     Api.getCandidates().then((data) => setCandidateCount(Array.isArray(data) ? data.length : 0)).catch(() => {});
     Api.getVacancies().then((data) => setVacancyCount(Array.isArray(data) ? data.length : 0)).catch(() => {});
     Api.getApplications()
-      .then((data) => setIncomingApps(Array.isArray(data?.incoming) ? data.incoming : []))
+      .then((data) => {
+        setIncomingApps(Array.isArray(data?.incoming) ? data.incoming : []);
+        setInvitations(Array.isArray(data?.invitations) ? data.invitations : []);
+      })
       .catch(() => {});
     Api.getMyProjects()
       .then((data) => setMyProjects(Array.isArray(data) ? data : []))
@@ -212,7 +243,13 @@ export const DashboardScreen = () => {
     }
 
     setNotification({ message: `Application ${status.toLowerCase()}`, type: 'success' });
-    Api.getApplications().then((result) => setIncomingApps(Array.isArray(result?.incoming) ? result.incoming : []));
+    Api.getApplications().then((result) => {
+      setIncomingApps(Array.isArray(result?.incoming) ? result.incoming : []);
+      setInvitations(Array.isArray(result?.invitations) ? result.invitations : []);
+    });
+    if (status === 'Accepted') {
+      refreshProjects();
+    }
   };
 
   return (
@@ -272,6 +309,41 @@ export const DashboardScreen = () => {
                 ) : (
                   <span className={`pill ${application.status === 'Accepted' ? 'pill-success' : 'pill-danger'}`}>{application.status}</span>
                 )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {invitations.length > 0 && (
+        <div className="animate-fade-in">
+          <h3 style={{ fontSize: '1.2rem', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+            <Briefcase size={20} style={{ color: 'var(--warning)' }} /> Project Invitations
+          </h3>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+            {invitations.map((invitation) => (
+              <div
+                key={invitation.id}
+                className="card"
+                style={{ display: 'grid', gridTemplateColumns: '1fr auto', alignItems: 'center', gap: '0.75rem', padding: '0.9rem 1rem' }}
+              >
+                <div>
+                  <h4 style={{ fontSize: '1rem' }}>
+                    <span style={{ color: 'var(--primary)' }}>{invitation.vacancy.author.name}</span> invited you to{' '}
+                    <span style={{ color: 'var(--primary)' }}>{invitation.vacancy.projectName}</span>
+                  </h4>
+                  <p style={{ fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+                    Role: {invitation.vacancy.neededRole} | GPA: {invitation.vacancy.minGpa} | {invitation.vacancy.weeklyHours}h/week | {invitation.vacancy.mode}
+                  </p>
+                </div>
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <button onClick={() => handleStatus(invitation.id, 'Accepted')} className="btn btn-primary" style={{ padding: '0.4rem 0.9rem', fontSize: '0.8rem' }}>
+                    Accept
+                  </button>
+                  <button onClick={() => handleStatus(invitation.id, 'Rejected')} className="btn btn-secondary" style={{ padding: '0.4rem 0.9rem', fontSize: '0.8rem' }}>
+                    Decline
+                  </button>
+                </div>
               </div>
             ))}
           </div>
@@ -406,7 +478,7 @@ export const VacanciesScreen = () => {
   const [notification, setNotification] = useState<ToastState>(null);
   const [form, setForm] = useState<VacancyForm>(defaultVacancyForm());
   const [editingId, setEditingId] = useState<number | null>(null);
-  const [appliedIds, setAppliedIds] = useState<number[]>([]);
+  const [outgoingApplications, setOutgoingApplications] = useState<OutgoingApplication[]>([]);
 
   const refreshVacancies = () => {
     Api.getVacancies().then((data) => setVacancies(Array.isArray(data) ? data : []));
@@ -415,7 +487,7 @@ export const VacanciesScreen = () => {
   const refreshApplications = () => {
     Api.getApplications().then((data) => {
       const outgoing = Array.isArray(data?.outgoing) ? data.outgoing : [];
-      setAppliedIds(outgoing.map((application: { vacancyId: number }) => application.vacancyId));
+      setOutgoingApplications(outgoing);
     });
   };
 
@@ -487,9 +559,11 @@ export const VacanciesScreen = () => {
       return;
     }
 
-    setAppliedIds((prev) => [...prev, id]);
+    setOutgoingApplications((prev) => [...prev, { vacancyId: id, status: 'Pending' }]);
     setNotification({ message: 'Application sent', type: 'success' });
   };
+
+  const outgoingByVacancy = new Map(outgoingApplications.map((application) => [application.vacancyId, application.status]));
 
   return (
     <div className="screen-container animate-fade-in">
@@ -615,8 +689,10 @@ export const VacanciesScreen = () => {
                     </button>
                   </>
                 )}
-                {appliedIds.includes(vacancy.id) ? (
-                  <span className="pill pill-neutral">Applied</span>
+                {outgoingByVacancy.has(vacancy.id) ? (
+                  <span className={`pill ${outgoingByVacancy.get(vacancy.id) === 'Invited' ? 'pill-success' : 'pill-neutral'}`}>
+                    {outgoingByVacancy.get(vacancy.id) === 'Invited' ? 'Invited' : 'Applied'}
+                  </span>
                 ) : (
                   <button onClick={() => handleApply(vacancy.id)} className="btn btn-primary" style={{ padding: '0.4rem 0.9rem', fontSize: '0.8rem' }}>
                     Apply
@@ -639,8 +715,10 @@ export const MatchScreen = () => {
   const { user } = useAuth();
   const [mode, setMode] = useState<MatchMode>((user?.matchingMode as MatchMode) || 'Hybrid');
   const [candidates, setCandidates] = useState<AppCandidate[]>([]);
+  const [myOpenVacancies, setMyOpenVacancies] = useState<VacancyRecord[]>([]);
   const [roleFilter, setRoleFilter] = useState('All');
   const [selectedUser, setSelectedUser] = useState<AppCandidate | null>(null);
+  const [inviteState, setInviteState] = useState<InviteState | null>(null);
   const [notification, setNotification] = useState<ToastState>(null);
 
   useEffect(() => {
@@ -653,7 +731,39 @@ export const MatchScreen = () => {
 
       setCandidates(Array.isArray(data) ? data : []);
     });
-  }, []);
+
+    Api.getVacancies().then((data) => {
+      if (data?.error) {
+        return;
+      }
+
+      const vacancies = Array.isArray(data) ? data : [];
+      setMyOpenVacancies(vacancies.filter((vacancy: VacancyRecord) => vacancy.authorId === user?.id && vacancy.status === 'Open'));
+    });
+  }, [user?.id]);
+
+  const openInviteModal = (candidate: AppCandidate) => {
+    if (myOpenVacancies.length === 0) {
+      setNotification({ message: 'Create an open vacancy first, then you can invite candidates.', type: 'error' });
+      return;
+    }
+
+    setInviteState({ candidate, vacancyId: String(myOpenVacancies[0].id) });
+  };
+
+  const sendInvite = async () => {
+    if (!inviteState) return;
+
+    const data = await Api.inviteCandidate(Number(inviteState.vacancyId), inviteState.candidate.id);
+    if (data?.error) {
+      setNotification({ message: data.error, type: 'error' });
+      return;
+    }
+
+    setInviteState(null);
+    setSelectedUser(null);
+    setNotification({ message: `Invitation sent to ${inviteState.candidate.name}`, type: 'success' });
+  };
 
   const results = useMemo(() => {
     if (!user || candidates.length === 0) return [];
@@ -766,7 +876,37 @@ export const MatchScreen = () => {
         ))}
       </div>
 
-      <UserDetailModal user={selectedUser} onClose={() => setSelectedUser(null)} />
+      <UserDetailModal user={selectedUser} onClose={() => setSelectedUser(null)} onInvite={openInviteModal} />
+
+      <Modal isOpen={Boolean(inviteState)} onClose={() => setInviteState(null)} title={`Invite ${inviteState?.candidate.name || 'candidate'} to project`}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          <div>
+            <label className="form-label">Select one of your open vacancies</label>
+            <select
+              value={inviteState?.vacancyId || ''}
+              onChange={(event) => setInviteState((current) => (current ? { ...current, vacancyId: event.target.value } : current))}
+              style={{ width: '100%', padding: '0.75rem', borderRadius: 'var(--radius-md)', background: 'var(--bg-base)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
+            >
+              {myOpenVacancies.map((vacancy) => (
+                <option key={vacancy.id} value={vacancy.id}>
+                  {vacancy.projectName} | {vacancy.neededRole}
+                </option>
+              ))}
+            </select>
+          </div>
+          <p style={{ margin: 0, color: 'var(--text-secondary)', fontSize: '0.84rem' }}>
+            The candidate will receive an invitation linked to the selected vacancy.
+          </p>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
+            <button className="btn btn-secondary" onClick={() => setInviteState(null)}>
+              Cancel
+            </button>
+            <button className="btn btn-primary" onClick={sendInvite}>
+              Invite to Project
+            </button>
+          </div>
+        </div>
+      </Modal>
 
       <div className="toast-container">
         {notification && <Toast {...notification} onClose={() => setNotification(null)} />}
@@ -775,7 +915,15 @@ export const MatchScreen = () => {
   );
 };
 
-const UserDetailModal = ({ user, onClose }: { user: AppCandidate | null; onClose: () => void }) => (
+const UserDetailModal = ({
+  user,
+  onClose,
+  onInvite,
+}: {
+  user: AppCandidate | null;
+  onClose: () => void;
+  onInvite: (candidate: AppCandidate) => void;
+}) => (
   <Modal isOpen={Boolean(user)} onClose={onClose} title="Candidate Profile">
     {user && (
       <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
@@ -816,8 +964,8 @@ const UserDetailModal = ({ user, onClose }: { user: AppCandidate | null; onClose
         </div>
 
         <div style={{ borderTop: '1px solid var(--border)', paddingTop: '1rem', display: 'flex', justifyContent: 'flex-end' }}>
-          <button className="btn btn-primary" onClick={onClose}>
-            <Mail size={18} /> Close
+          <button className="btn btn-primary" onClick={() => onInvite(user)}>
+            <Briefcase size={18} /> Invite to Project
           </button>
         </div>
       </div>
