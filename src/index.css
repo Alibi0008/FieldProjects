@@ -267,6 +267,75 @@ input[type="range"]:focus {
   border-left: 3px solid var(--primary);
 }
 
+.notification-button {
+  position: relative;
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 0.7rem;
+  margin-bottom: 0.75rem;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface-hover);
+  color: var(--text-primary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.notification-button:hover {
+  border-color: var(--border-bright);
+}
+
+.notification-badge {
+  display: inline-flex;
+  min-width: 1.25rem;
+  height: 1.25rem;
+  align-items: center;
+  justify-content: center;
+  margin-left: auto;
+  padding: 0 0.3rem;
+  border-radius: var(--radius-full);
+  background: var(--danger);
+  color: white;
+  font-size: 0.68rem;
+}
+
+.application-toast {
+  position: fixed;
+  right: 2rem;
+  bottom: 2rem;
+  z-index: 2000;
+  display: flex;
+  max-width: 340px;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 1rem 1.1rem;
+  border: 1px solid var(--border-bright);
+  border-left: 4px solid var(--primary);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-md);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.application-toast strong,
+.application-toast small {
+  display: block;
+}
+
+.application-toast small {
+  margin-top: 0.15rem;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
 /* Stats Widget */
 .stat-card {
   display: flex;
@@ -552,6 +621,12 @@ input[type="range"]:focus {
 }
 
 @media (max-width: 720px) {
+  .application-toast {
+    right: 1rem;
+    bottom: 1rem;
+    max-width: calc(100vw - 2rem);
+  }
+
   .dashboard-overview {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 0.85rem;
