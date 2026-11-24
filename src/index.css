@@ -399,7 +399,9 @@ input[type="range"]:focus {
 }
 
 .vacancy-list {
-  gap: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
 }
 
 .stat-value {

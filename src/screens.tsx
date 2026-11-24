@@ -677,7 +677,7 @@ export const VacanciesScreen = () => {
           </div>
           <span className="section-count">{vacancies.length} open</span>
         </div>
-      <div className="grid vacancy-list" style={{ gridTemplateColumns: '1fr' }}>
+      <div className="vacancy-list">
         {vacancies.length === 0 && <p style={{ textAlign: 'center', padding: '4rem', color: 'var(--text-muted)' }}>No vacancies yet. Post the first one.</p>}
         {vacancies.map((vacancy) => (
           <div
