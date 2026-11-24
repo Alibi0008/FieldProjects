@@ -28,7 +28,7 @@ export const MatchingEngine = {
         explanation = `Social focus: Karma ${karma} and schedule match (${candidate.schedule || 'N/A'}) drive the score.`;
       } else { // Hybrid
         total = Math.round(performance * 0.5 + social * 0.5);
-        risk = (gpa < 2.5 || karma < 60) ? 'High Risk' : 'Medium Risk';
+        risk = (gpa < 2.5 || karma < 60) ? 'High Risk' : 'Compatible';
         explanation = `Hybrid focus: Balanced evaluation of performance (${performance}) and social traits (${social}).`;
       }
 

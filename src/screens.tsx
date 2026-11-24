@@ -10,6 +10,7 @@ import {
   Info,
   Loader,
   MessageSquare,
+  Plus,
   Send,
   Star,
   Trash2,
@@ -263,19 +264,19 @@ export const DashboardScreen = () => {
         </p>
       </div>
 
-      <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '0.75rem' }}>
+      <section className="dashboard-overview" aria-label="Workspace overview">
         {[
           { label: 'Vacancies', value: vacancyCount, color: 'var(--primary)' },
           { label: 'Candidates', value: candidateCount, color: 'var(--secondary)' },
           { label: 'Karma', value: user?.karma ?? 80, color: 'var(--warning)' },
           { label: 'Finished', value: user?.completedProjects ?? 0, color: 'var(--success)' },
         ].map((item) => (
-          <div key={item.label} className="card stat-card" style={{ padding: '0.85rem 1rem', minHeight: '92px' }}>
+          <div key={item.label} className="card stat-card dashboard-stat-card">
             <span style={{ color: item.color, fontWeight: 600, fontSize: '0.72rem', textTransform: 'uppercase' }}>{item.label}</span>
-            <div className="stat-value" style={{ fontSize: '1.2rem' }}>{item.value}</div>
+            <div className="stat-value">{item.value}</div>
           </div>
         ))}
-      </div>
+      </section>
 
       {incomingApps.length > 0 && (
         <div className="animate-fade-in">
@@ -478,6 +479,7 @@ export const VacanciesScreen = () => {
   const [notification, setNotification] = useState<ToastState>(null);
   const [form, setForm] = useState<VacancyForm>(defaultVacancyForm());
   const [editingId, setEditingId] = useState<number | null>(null);
+  const [showComposer, setShowComposer] = useState(false);
   const [outgoingApplications, setOutgoingApplications] = useState<OutgoingApplication[]>([]);
 
   const refreshVacancies = () => {
@@ -499,6 +501,7 @@ export const VacanciesScreen = () => {
   const resetForm = () => {
     setEditingId(null);
     setForm(defaultVacancyForm());
+    setShowComposer(false);
   };
 
   const add = async () => {
@@ -537,6 +540,7 @@ export const VacanciesScreen = () => {
       mode: vacancy.mode,
       description: vacancy.description,
     });
+    setShowComposer(true);
   };
 
   const remove = async (id: number) => {
@@ -567,13 +571,29 @@ export const VacanciesScreen = () => {
 
   return (
     <div className="screen-container animate-fade-in">
-      <div>
-        <h2 style={{ fontSize: '2rem', fontWeight: 800, fontFamily: 'var(--font-heading)' }}>Vacancies</h2>
-        <p style={{ color: 'var(--text-secondary)' }}>Find projects to join or recruit teammates for your own work.</p>
+      <div className="page-heading-with-action">
+        <div>
+          <h2 style={{ fontSize: '2rem', fontWeight: 800, fontFamily: 'var(--font-heading)' }}>Open Roles</h2>
+          <p style={{ color: 'var(--text-secondary)' }}>Explore teams that are still recruiting. A vacancy is a request for a teammate, not an active project.</p>
+        </div>
+        <button onClick={() => { resetForm(); setShowComposer(true); }} className="btn btn-primary">
+          <Plus size={18} /> Post Role
+        </button>
       </div>
 
-      <div className="card form-container-small" style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-        <h3 style={{ fontSize: '1.05rem' }}>{editingId ? 'Edit Vacancy' : 'Post New Vacancy'}</h3>
+      {showComposer && <div className="card vacancy-composer">
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem' }}>
+          <h3 style={{ fontSize: '1.05rem' }}>{editingId ? 'Edit Vacancy' : 'Post New Vacancy'}</h3>
+          <button
+            onClick={resetForm}
+            className="btn btn-secondary"
+            aria-label="Close vacancy form"
+            title="Close form"
+            style={{ padding: '0.4rem', width: '34px', height: '34px' }}
+          >
+            <X size={17} />
+          </button>
+        </div>
         <div className="grid" style={{ gridTemplateColumns: 'repeat(4, 1fr)', gap: '1rem', alignItems: 'end' }}>
           <div className="form-group">
             <label className="form-label">Project Name</label>
@@ -647,9 +667,17 @@ export const VacanciesScreen = () => {
             )}
           </div>
         </div>
-      </div>
+      </div>}
 
-      <div className="grid" style={{ gridTemplateColumns: '1fr', gap: '0.75rem' }}>
+      <section className="vacancy-list-section">
+        <div className="section-heading">
+          <div>
+            <h3>Browse open roles</h3>
+            <p>Apply to join a team, or manage roles you have posted.</p>
+          </div>
+          <span className="section-count">{vacancies.length} open</span>
+        </div>
+      <div className="grid vacancy-list" style={{ gridTemplateColumns: '1fr' }}>
         {vacancies.length === 0 && <p style={{ textAlign: 'center', padding: '4rem', color: 'var(--text-muted)' }}>No vacancies yet. Post the first one.</p>}
         {vacancies.map((vacancy) => (
           <div
@@ -689,7 +717,9 @@ export const VacanciesScreen = () => {
                     </button>
                   </>
                 )}
-                {outgoingByVacancy.has(vacancy.id) ? (
+                {user?.id === vacancy.authorId ? (
+                  <span className="pill pill-neutral">Your posting</span>
+                ) : outgoingByVacancy.has(vacancy.id) ? (
                   <span className={`pill ${outgoingByVacancy.get(vacancy.id) === 'Invited' ? 'pill-success' : 'pill-neutral'}`}>
                     {outgoingByVacancy.get(vacancy.id) === 'Invited' ? 'Invited' : 'Applied'}
                   </span>
@@ -703,6 +733,7 @@ export const VacanciesScreen = () => {
           </div>
         ))}
       </div>
+      </section>
 
       <div className="toast-container">
         {notification && <Toast {...notification} onClose={() => setNotification(null)} />}
@@ -993,7 +1024,7 @@ export const ProjectsScreen = () => {
     <div className="screen-container animate-fade-in">
       <div style={{ marginBottom: '1rem' }}>
         <h2 style={{ fontSize: '2rem', fontWeight: 800, fontFamily: 'var(--font-heading)' }}>My Projects</h2>
-        <p style={{ color: 'var(--text-secondary)' }}>Teams you are leading or contributing to.</p>
+        <p style={{ color: 'var(--text-secondary)' }}>Teams that you have already joined. Use this space to collaborate, chat, and finish the work together.</p>
       </div>
 
       {loading ? (
